@@ -80,7 +80,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 </style>
 </head>
 <body>
-
+<script>
+history.pushState(null, '', location.href);
+window.addEventListener('popstate', function() {
+  history.pushState(null, '', location.href);
+  if(document.getElementById('main-view').style.display !== 'none') {
+    logout();
+  }
+});
+</script>
 <div id="login-view" class="login-wrap">
   <div class="header"><h1>🏢 Invoice Approvals</h1></div>
   <div class="login-body">
@@ -326,7 +334,7 @@ function renderPayment(c){
   const total=approved.reduce((s,i)=>s+Number(i['Invoice Amt']||0),0);
   let html=userHeader(`${approved.length} to pay · ${fmt(total)}`);
   if(!approved.length){
-    html+=`<div class="empty"><div class="empty-icon">⏳</div><div class="empty-title">Nothing to pay yet</div><div class="empty-sub">Approved invoices will appear here.</div></div>`;
+    html+=`<div class="empty"><div class="empty-icon">⏳</div><div class="empty-title">No pending payments at this time</div><div class="empty-sub">Approved invoices will appear here.</div></div>`;
   }else{
     html+=`<div class="summary">
       <div class="summary-item"><div class="summary-val">${approved.length}</div><div class="summary-lbl">To pay</div></div>
