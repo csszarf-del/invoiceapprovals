@@ -605,13 +605,6 @@ function showPinMsg(text,type){
   setTimeout(()=>{el.style.display='none';},4000);
 }
 
-// BACK BUTTON
-history.pushState(null,'',location.href);
-window.addEventListener('popstate',function(){
-  history.pushState(null,'',location.href);
-  if(document.getElementById('main-view').style.display!=='none')logout();
-});
-
 document.getElementById('main-view').style.display='none';
 document.getElementById('login-view').style.display='flex';
 </script>
