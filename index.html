@@ -198,7 +198,7 @@ async function handleLogin(){
       currentUser={...result.user,init:initials(result.user.name)};
       document.getElementById('login-view').style.display='none';
       document.getElementById('main-view').style.display='block';
-      currentTab=currentUser.role==='payment'?'payment':'pending';
+     currentTab=currentUser.role==='payment'?'payment':currentUser.role==='viewer'?'paid':'pending';
       buildNav();
       resetAutoLogout();
       loadUsers();
