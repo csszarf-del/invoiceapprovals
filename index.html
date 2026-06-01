@@ -173,29 +173,30 @@ document.addEventListener('click',resetAutoLogout);
 document.addEventListener('scroll',resetAutoLogout);
 
 // PULL TO REFRESH
+let pullEl=document.getElementById('refresh-indicator');
+let pullStartY=0,pulling=false;
 document.addEventListener('touchstart',function(e){
   if(document.getElementById('main-view').style.display==='none')return;
-  touchStartY=e.touches[0].clientY;
+  if(window.scrollY<=0)pullStartY=e.touches[0].clientY;
+  else pullStartY=0;
 },{passive:true});
-
 document.addEventListener('touchmove',function(e){
-  if(document.getElementById('main-view').style.display==='none')return;
-  if(isPulling)return;
-  const y=e.touches[0].clientY;
-  const diff=y-touchStartY;
+  if(!pullStartY||pulling)return;
+  const diff=e.touches[0].clientY-pullStartY;
   if(diff>100&&window.scrollY<=0){
+    pulling=true;
     isPulling=true;
-    const ind=document.getElementById('refresh-indicator');
-    ind.style.display='block';
+    pullEl.style.display='block';
     loadInvoices().then(()=>{
-      setTimeout(()=>{ind.style.display='none';isPulling=false;},500);
+      setTimeout(()=>{pullEl.style.display='none';pulling=false;isPulling=false;},800);
     });
   }
 },{passive:true});
-
 document.addEventListener('touchend',function(){
-  touchStartY=0;
+  pullStartY=0;
 },{passive:true});
+
+
 
 // LOGIN
 async function handleLogin(){
@@ -641,7 +642,7 @@ function showPinMsg(text,type){
 history.pushState(null,'',location.href);
 window.addEventListener('popstate',function(){
   history.pushState(null,'',location.href);
-  if(document.getElementById('main-view').style.display!=='none')logout();
+  if(document.getElementById('main-view').style.display!=='none'&&!isPulling)logout();
 });
 
 document.getElementById('main-view').style.display='none';
