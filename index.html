@@ -15,6 +15,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .header{background:#fff;padding:16px 20px;display:flex;align-items:center;border-bottom:1px solid #ebebeb;position:sticky;top:0;z-index:10}
 .header h1{font-size:20px;font-weight:800;flex:1}
 .badge{background:#ff3b30;color:#fff;font-size:13px;font-weight:700;padding:4px 10px;border-radius:20px}
+.header-refresh{background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:#1D9E75}
+.header-refresh.spinning{animation:spin 1s linear infinite}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #ebebeb;display:flex;justify-content:center;align-items:center;gap:6px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));z-index:20}
 .nav-btn{display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:10px 16px;border-radius:16px;color:#999;font-size:12px;font-weight:600;transition:all 0.15s;min-width:70px}
 .nav-btn.active{background:#f0faf5;color:#1D9E75}
@@ -93,7 +96,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .pin-msg{padding:12px;border-radius:12px;font-size:14px;font-weight:600;text-align:center;margin-top:10px;display:none}
 .pin-ok{background:#e8faf3;color:#1D9E75}
 .pin-err{background:#fff0f0;color:#ff3b30}
-.refresh-indicator{text-align:center;padding:12px;font-size:14px;color:#1D9E75;font-weight:600;display:none}
 .user-pick{padding:14px;border:1.5px solid #ebebeb;border-radius:14px;background:#fff;cursor:pointer;font-size:15px;font-weight:600;text-align:left;width:100%;margin-bottom:8px;display:flex;align-items:center;gap:10px}
 .user-pick:active{background:#f5f5f5}
 .user-pick .pick-av{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;background:#dbeafe;color:#1d4ed8;flex-shrink:0}
@@ -126,8 +128,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <div class="header">
     <h1 id="header-title">Invoice Approvals</h1>
     <span class="badge" id="header-badge" style="display:none"></span>
+    <button class="header-refresh" id="refresh-btn" onclick="doRefresh()">↻</button>
   </div>
-  <div class="refresh-indicator" id="refresh-indicator">↻ Refreshing...</div>
   <div class="page" id="main-content"></div>
   <div class="bottom-nav" id="bottom-nav"></div>
 </div>
@@ -146,7 +148,7 @@ const ROLE_TABS={
 };
 
 let currentUser=null,currentTab='pending',invoices=[],allUsers=[],activeFilter='All',pendingAction=null;
-let autoLogoutTimer=null,touchStartY=0,isPulling=false;
+let autoLogoutTimer=null;
 
 function fmt(a){return '$'+Number(a).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function initials(name){return name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
@@ -168,35 +170,17 @@ function resetAutoLogout(){
     autoLogoutTimer=setTimeout(()=>{alert('Session expired. Please sign in again.');logout();},30*60*1000);
   }
 }
-document.addEventListener('touchstart',resetAutoLogout);
+document.addEventListener('touchstart',resetAutoLogout,{passive:true});
 document.addEventListener('click',resetAutoLogout);
-document.addEventListener('scroll',resetAutoLogout);
+document.addEventListener('scroll',resetAutoLogout,{passive:true});
 
-// PULL TO REFRESH
-let pullEl=document.getElementById('refresh-indicator');
-let pullStartY=0,pulling=false;
-document.addEventListener('touchstart',function(e){
-  if(document.getElementById('main-view').style.display==='none')return;
-  if(window.scrollY<=0)pullStartY=e.touches[0].clientY;
-  else pullStartY=0;
-},{passive:true});
-document.addEventListener('touchmove',function(e){
-  if(!pullStartY||pulling)return;
-  const diff=e.touches[0].clientY-pullStartY;
-  if(diff>100&&window.scrollY<=0){
-    pulling=true;
-    isPulling=true;
-    pullEl.style.display='block';
-    loadInvoices().then(()=>{
-      setTimeout(()=>{pullEl.style.display='none';pulling=false;isPulling=false;},800);
-    });
-  }
-},{passive:true});
-document.addEventListener('touchend',function(){
-  pullStartY=0;
-},{passive:true});
-
-
+// REFRESH BUTTON IN HEADER
+async function doRefresh(){
+  const btn=document.getElementById('refresh-btn');
+  btn.classList.add('spinning');
+  await loadInvoices();
+  setTimeout(()=>btn.classList.remove('spinning'),500);
+}
 
 // LOGIN
 async function handleLogin(){
@@ -273,7 +257,7 @@ async function loadInvoices(){
     updateHeader();
     render();
   }catch(e){
-    document.getElementById('main-content').innerHTML='<div class="loading">Error loading. Pull down to retry.</div>';
+    document.getElementById('main-content').innerHTML='<div class="loading">Error loading. Tap ↻ to retry.</div>';
   }
 }
 
@@ -501,34 +485,21 @@ function renderReviewed(c){
 function renderPayment(c){
   const approved=invoices.filter(i=>String(i['Invoice Status']||'').toLowerCase()==='approved');
   const total=approved.reduce((s,i)=>s+Number(i['Invoice Amt']||0),0);
-
-  // Get filter options
   const properties=[...new Set(approved.map(i=>i['Property']||'Other').filter(Boolean))].sort();
   const filterOpts=properties.length>1?['All',...properties]:[];
-
   const filtered=activeFilter==='All'?approved:approved.filter(i=>(i['Property']||'Other')===activeFilter);
-
   let html=userHeader(`${approved.length} to pay · ${fmt(total)}`);
-
   if(filterOpts.length){
     html+=`<div class="filters">`+filterOpts.map(f=>`<button class="chip${f===activeFilter?' active':''}" onclick="setFilter('${f}')">${f}</button>`).join('')+`</div>`;
   }
-
   if(!filtered.length){
     html+=`<div class="empty"><div class="empty-icon">⏳</div><div class="empty-title">No pending payments at this time</div><div class="empty-sub">${activeFilter!=='All'?'No approved invoices for this property.':'Approved invoices will appear here.'}</div></div>`;
   }else{
-    if(activeFilter==='All'){
-      html+=`<div class="summary">
-        <div class="summary-item"><div class="summary-val">${approved.length}</div><div class="summary-lbl">To pay</div></div>
-        <div class="summary-item"><div class="summary-val" style="color:#1D9E75">${fmt(total)}</div><div class="summary-lbl">Total due</div></div>
-      </div>`;
-    }else{
-      const filteredTotal=filtered.reduce((s,i)=>s+Number(i['Invoice Amt']||0),0);
-      html+=`<div class="summary">
-        <div class="summary-item"><div class="summary-val">${filtered.length}</div><div class="summary-lbl">To pay</div></div>
-        <div class="summary-item"><div class="summary-val" style="color:#1D9E75">${fmt(filteredTotal)}</div><div class="summary-lbl">Filtered total</div></div>
-      </div>`;
-    }
+    const filteredTotal=filtered.reduce((s,i)=>s+Number(i['Invoice Amt']||0),0);
+    html+=`<div class="summary">
+      <div class="summary-item"><div class="summary-val">${filtered.length}</div><div class="summary-lbl">To pay</div></div>
+      <div class="summary-item"><div class="summary-val" style="color:#1D9E75">${fmt(filteredTotal)}</div><div class="summary-lbl">Total due</div></div>
+    </div>`;
     filtered.forEach(inv=>{
       const prop=[inv['Property'],inv['Unit']].filter(Boolean).join(' · ');
       const pdf=inv['Invoice PDF Link'];
@@ -602,10 +573,6 @@ function renderSettings(c){
     </div>
   </div>
   <div class="settings-card">
-    <div class="settings-title">🔄 Refresh Data</div>
-    <button class="btn-save" onclick="loadInvoices()">Refresh Invoices</button>
-  </div>
-  <div class="settings-card">
     <div class="settings-title">ℹ️ About</div>
     <div style="font-size:14px;color:#888">Sky High Management Invoice Approvals v3.0</div>
   </div>`;
@@ -642,7 +609,7 @@ function showPinMsg(text,type){
 history.pushState(null,'',location.href);
 window.addEventListener('popstate',function(){
   history.pushState(null,'',location.href);
-  if(document.getElementById('main-view').style.display!=='none'&&!isPulling)logout();
+  if(document.getElementById('main-view').style.display!=='none')logout();
 });
 
 document.getElementById('main-view').style.display='none';
