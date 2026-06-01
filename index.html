@@ -180,17 +180,21 @@ document.addEventListener('touchstart',function(e){
 
 document.addEventListener('touchmove',function(e){
   if(document.getElementById('main-view').style.display==='none')return;
+  if(isPulling)return;
   const y=e.touches[0].clientY;
   const diff=y-touchStartY;
-  if(diff>80&&window.scrollY===0&&!isPulling){
+  if(diff>100&&window.scrollY<=0){
     isPulling=true;
     const ind=document.getElementById('refresh-indicator');
     ind.style.display='block';
     loadInvoices().then(()=>{
-      ind.style.display='none';
-      isPulling=false;
+      setTimeout(()=>{ind.style.display='none';isPulling=false;},500);
     });
   }
+},{passive:true});
+
+document.addEventListener('touchend',function(){
+  touchStartY=0;
 },{passive:true});
 
 // LOGIN
