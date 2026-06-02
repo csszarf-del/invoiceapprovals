@@ -139,7 +139,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 </div>
 
 <script>
-const SCRIPT_URL='https://script.google.com/macros/s/AKfycbxLzyEfalCYSpSgsjCyUxSeWYqFzUxdXzRSS0k7_fE8QFdTuciBEKvrMoRIVJTa4SXy/exec';
+const SCRIPT_URL='https://script.google.com/macros/s/AKfycbwTiUPF21dX_jhqck8uxHMAObWC0TdD0gOCgbJnMMWIhDfoN4lawKtAeKu9GPHUmSzL/exec';
+const API_TOKEN='SkyHi2026$ecure!';
 
 const ROLE_TABS={
   manager:[{id:'pending',icon:'📋',label:'Pending'},{id:'done',icon:'✅',label:'Reviewed'},{id:'settings',icon:'⚙️',label:'Settings'}],
@@ -155,6 +156,7 @@ function fmt(a){return '$'+Number(a).toLocaleString('en-US',{minimumFractionDigi
 function initials(name){return name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
 
 async function api(params){
+  params.token=API_TOKEN;
   const url=SCRIPT_URL+'?'+new URLSearchParams(params);
   try{
     const res=await fetch(url,{redirect:'follow',mode:'cors'});
