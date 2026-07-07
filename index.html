@@ -117,6 +117,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .dash-row:last-child{border-bottom:none}
 .dash-label{color:#666;flex:1;word-break:break-word;padding-right:8px}
 .dash-value{font-weight:700;flex-shrink:0}
+.search-box{width:100%;padding:14px 16px;border:1.5px solid #ebebeb;border-radius:14px;font-size:16px;font-family:inherit;color:#1a1a1a;background:#fff;margin-bottom:14px}
+.search-box:focus{outline:none;border-color:#1D9E75}
+.btn-add-tenant{width:100%;padding:16px;background:#1D9E75;color:#fff;border:none;border-radius:14px;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:16px}
+.btn-add-tenant:active{background:#178a64}
+.btn-edit-tenant{width:100%;padding:14px;background:#f5f5f5;color:#555;border:none;border-radius:14px;font-size:15px;font-weight:600;cursor:pointer;text-align:center;margin-top:8px}
+.btn-edit-tenant:active{background:#ebebeb}
+.tenant-detail{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #f7f7f7}
+.tenant-detail:last-of-type{border-bottom:none}
+.tenant-detail .td-label{color:#999}
+.tenant-detail .td-value{font-weight:600;text-align:right}
+.tenant-detail a{color:#3b5bdb;text-decoration:none;font-weight:600}
 </style>
 </head>
 <body>
@@ -148,10 +159,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <span class="badge" id="header-badge" style="display:none"></span>
     <button class="header-refresh" id="refresh-btn" onclick="doRefresh()">↻</button>
   </div>
-  <div class="module-switch" id="module-switch" style="display:none">
-    <button class="mod-btn active" id="mod-invoices" onclick="switchModule('invoices')">📄 Invoices</button>
-    <button class="mod-btn" id="mod-maintenance" onclick="switchModule('maintenance')">🔧 Maintenance</button>
-  </div>
+  <div class="module-switch" id="module-switch" style="display:none"></div>
   <div class="page" id="main-content"></div>
   <div class="bottom-nav" id="bottom-nav"></div>
 </div>
@@ -178,13 +186,24 @@ const MAINT_TABS={
   manager:[{id:'m_open',icon:'🔧',label:'Open'},{id:'m_dash',icon:'📊',label:'Dashboard'}],
   payment:[],
 };
+const TENANT_TABS={
+  admin:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
+  manager:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
+  viewer:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
+  dispatcher:[],fieldworker:[],payment:[],
+};
 const ROLE_MODULES={
-  admin:['invoices','maintenance'],dispatcher:['maintenance'],fieldworker:['maintenance'],
-  manager:['invoices','maintenance'],viewer:['invoices','maintenance'],payment:['invoices'],
+  admin:['invoices','maintenance','tenants'],dispatcher:['maintenance'],fieldworker:['maintenance'],
+  manager:['invoices','maintenance','tenants'],viewer:['invoices','maintenance','tenants'],payment:['invoices'],
+};
+const MODULE_META={
+  invoices:{icon:'📄',label:'Invoices'},
+  maintenance:{icon:'🔧',label:'Maintenance'},
+  tenants:{icon:'👥',label:'Tenants'},
 };
 
 let currentUser=null,currentModule='invoices',currentTab='pending';
-let invoices=[],tickets=[],ticketStats=null,allUsers=[],activeFilter='All',pendingAction=null,autoLogoutTimer=null;
+let invoices=[],tickets=[],ticketStats=null,tenants=[],allUsers=[],activeFilter='All',tenantSearch='',pendingAction=null,autoLogoutTimer=null;
 
 // ─── UTILITIES ───
 function fmt(a){return '$'+Number(a).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
@@ -225,6 +244,7 @@ async function doRefresh(){
   const btn=document.getElementById('refresh-btn');
   btn.classList.add('spinning');
   if(currentModule==='invoices')await loadInvoices();
+  else if(currentModule==='tenants')await loadTenants();
   else{await loadTickets();await loadTicketStats();}
   setTimeout(()=>btn.classList.remove('spinning'),500);
 }
@@ -246,7 +266,7 @@ async function handleLogin(){
       document.getElementById('main-view').style.display='block';
       const mods=ROLE_MODULES[currentUser.role]||['invoices'];
       currentModule=mods[0];
-      document.getElementById('module-switch').style.display=mods.length>1?'flex':'none';
+      buildModuleSwitch();
       setupModule();resetAutoLogout();loadUsers();
     }else{errEl.textContent=result.error||'Invalid credentials';errEl.style.display='block';}
   }catch(e){errEl.textContent='Connection error. Please try again.';errEl.style.display='block';}
@@ -256,10 +276,17 @@ document.addEventListener('keydown',function(e){if(e.key==='Enter'&&document.get
 
 async function loadUsers(){try{const d=await api({action:'getUsers'});allUsers=Array.isArray(d)?d:[];}catch(e){allUsers=[];}}
 
+function buildModuleSwitch(){
+  const mods=ROLE_MODULES[currentUser.role]||['invoices'];
+  const sw=document.getElementById('module-switch');
+  if(mods.length<2){sw.style.display='none';return;}
+  sw.style.display='flex';
+  sw.innerHTML=mods.map(m=>`<button class="mod-btn${m===currentModule?' active':''}" id="mod-${m}" onclick="switchModule('${m}')">${MODULE_META[m].icon} ${MODULE_META[m].label}</button>`).join('');
+}
+
 function switchModule(mod){
-  currentModule=mod;activeFilter='All';
-  document.getElementById('mod-invoices').classList.toggle('active',mod==='invoices');
-  document.getElementById('mod-maintenance').classList.toggle('active',mod==='maintenance');
+  currentModule=mod;activeFilter='All';tenantSearch='';
+  buildModuleSwitch();
   setupModule();
 }
 
@@ -268,6 +295,10 @@ function setupModule(){
     const tabs=INVOICE_TABS[currentUser.role]||INVOICE_TABS.manager;
     currentTab=currentUser.role==='payment'?'payment':currentUser.role==='viewer'?'paid':'pending';
     buildNav(tabs);loadInvoices();
+  }else if(currentModule==='tenants'){
+    const tabs=TENANT_TABS[currentUser.role]||[];
+    currentTab='t_current';
+    buildNav(tabs);loadTenants();
   }else{
     const tabs=MAINT_TABS[currentUser.role]||MAINT_TABS.manager;
     currentTab=currentUser.role==='fieldworker'?'m_mine':'m_open';
@@ -282,8 +313,8 @@ function buildNav(tabs){
 }
 
 function logout(){
-  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';
-  invoices=[];tickets=[];ticketStats=null;allUsers=[];
+  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';tenantSearch='';
+  invoices=[];tickets=[];ticketStats=null;tenants=[];allUsers=[];
   if(autoLogoutTimer)clearTimeout(autoLogoutTimer);
   document.getElementById('login-email').value='';document.getElementById('login-pin').value='';
   document.getElementById('login-error').style.display='none';
@@ -307,6 +338,11 @@ async function loadTickets(){
   catch(e){document.getElementById('main-content').innerHTML='<div class="loading">Error loading. Tap ↻ to retry.</div>';}
 }
 async function loadTicketStats(){try{ticketStats=await api({action:'getTicketStats'});}catch(e){ticketStats=null;}}
+async function loadTenants(){
+  document.getElementById('main-content').innerHTML='<div class="loading">Loading tenants…</div>';
+  try{const d=await api({action:'getTenants'});tenants=Array.isArray(d)?d:[];updateHeader();render();}
+  catch(e){document.getElementById('main-content').innerHTML='<div class="loading">Error loading. Tap ↻ to retry.</div>';}
+}
 
 function updateHeader(){
   if(currentModule==='invoices'){
@@ -314,6 +350,8 @@ function updateHeader(){
     document.getElementById('header-title').textContent=currentUser.role==='payment'?'Payment Queue':'Invoices';
     const b=document.getElementById('header-badge');
     if((currentUser.role==='manager'||currentUser.role==='admin')&&p.length>0){b.textContent=p.length;b.style.display='';}else b.style.display='none';
+  }else if(currentModule==='tenants'){
+    document.getElementById('header-title').textContent='Tenants & Leases';document.getElementById('header-badge').style.display='none';
   }else{document.getElementById('header-title').textContent='Maintenance';document.getElementById('header-badge').style.display='none';}
 }
 
@@ -336,7 +374,11 @@ function render(){
   else if(currentTab==='m_mine')renderMaintMine(c);
   else if(currentTab==='m_all')renderMaintAll(c);
   else if(currentTab==='m_dash')renderMaintDash(c);
+  else if(currentTab==='t_current')renderTenantsCurrent(c);
+  else if(currentTab==='t_expiring')renderTenantsExpiring(c);
+  else if(currentTab==='t_all')renderTenantsAll(c);
   else if(currentTab==='summary')renderSummary(c);
+  else if(currentTab==='settings')renderSettings(c);
 }
 
 function userHeader(sub){
@@ -348,6 +390,36 @@ function invoiceAge(d){if(!d)return '';const dt=new Date(d),now=new Date(),days=
 function priPill(p){const l=(p||'').toLowerCase();if(l==='emergency')return 'pill-red';if(l==='urgent')return 'pill-orange';if(l==='high')return 'pill-yellow';if(l==='medium')return 'pill-blue';return 'pill-gray';}
 function priClass(p){const l=(p||'').toLowerCase();if(l==='emergency')return 'pri-emergency';if(l==='urgent')return 'pri-urgent';if(l==='high')return 'pri-high';if(l==='medium')return 'pri-medium';return 'pri-low';}
 function statusPill(s){const l=(s||'').toLowerCase();if(l==='resolved'||l.includes('closed'))return 'pill-green';if(l==='in progress')return 'pill-blue';if(l.includes('pending'))return 'pill-yellow';return 'pill-gray';}
+
+// ─── TENANT DATE HELPERS ───
+function parseLeaseDate(s){
+  if(!s)return null;
+  s=String(s).trim();
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m)return new Date(+m[1],+m[2]-1,+m[3]);
+  m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m)return new Date(+m[3],+m[1]-1,+m[2]);
+  const d=new Date(s);return isNaN(d)?null:d;
+}
+function leaseDaysLeft(t){
+  const d=parseLeaseDate(t['Lease End']);if(!d)return null;
+  const now=new Date();now.setHours(0,0,0,0);
+  return Math.round((d-now)/864e5);
+}
+function fmtLeaseDate(s){const d=parseLeaseDate(s);return d?(d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear():'—';}
+function toDateInputValue(s){
+  const d=parseLeaseDate(s);if(!d)return '';
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function tenantStatusPill(s){
+  const l=(s||'current').toLowerCase();
+  if(l==='current')return 'pill-green';
+  if(l==='in court')return 'pill-red';
+  if(l==='notice given')return 'pill-yellow';
+  if(l==='vacant')return 'pill-gray';
+  if(l==='moved out')return 'pill-gray';
+  return 'pill-blue';
+}
 
 // ─── OVERLAY ───
 function overlayClick(e){if(e.target===document.getElementById('overlay'))closeSheet();}
@@ -480,6 +552,118 @@ async function confirmTicketNote(){
     const t=tickets.find(i=>String(i['Issue #'])===String(issueNum));
     if(t){const ex=t['NOTES']||'';t['NOTES']=ex?ex+'\n'+note:note;}render();
   }catch(e){alert('Error.');render();}
+}
+
+// ─── TENANT ACTIONS ───
+function canEditTenants(){return currentUser&&(currentUser.role==='admin'||currentUser.role==='manager');}
+
+function openTenantSheet(id){
+  const t=id?tenants.find(x=>String(x['ID'])===String(id)):null;
+  pendingAction={type:'tenant',id:id||null};
+  const statusOpts=['Current','Notice Given','In Court','Moved Out','Vacant'].map(s=>`<option value="${s}"${t&&String(t['Status'])===s?' selected':''}>${s}</option>`).join('');
+  showSheet(`<div class="sheet-title">${t?'Edit tenant':'Add tenant'}</div>
+    <div class="sheet-sub">${t?esc(t['Tenant Name']||'')+' · '+esc(t['Property']||''):'New tenant / unit record'}</div>
+    <label class="input-label" style="margin-bottom:6px">Property *</label>
+    <input id="tn-property" placeholder="Property name / address" value="${t?escAttr(t['Property']):''}">
+    <label class="input-label" style="margin-bottom:6px">Unit</label>
+    <input id="tn-unit" placeholder="Apt / unit #" value="${t?escAttr(t['Unit']):''}">
+    <label class="input-label" style="margin-bottom:6px">Tenant Name *</label>
+    <input id="tn-name" placeholder="Full name" value="${t?escAttr(t['Tenant Name']):''}">
+    <label class="input-label" style="margin-bottom:6px">Phone</label>
+    <input id="tn-phone" type="tel" placeholder="Phone number" value="${t?escAttr(t['Phone']):''}">
+    <label class="input-label" style="margin-bottom:6px">Email</label>
+    <input id="tn-email" type="email" placeholder="Email" autocapitalize="none" value="${t?escAttr(t['Email']):''}">
+    <label class="input-label" style="margin-bottom:6px">Lease Start</label>
+    <input id="tn-lease-start" type="date" value="${t?toDateInputValue(t['Lease Start']):''}">
+    <label class="input-label" style="margin-bottom:6px">Lease End</label>
+    <input id="tn-lease-end" type="date" value="${t?toDateInputValue(t['Lease End']):''}">
+    <label class="input-label" style="margin-bottom:6px">Monthly Rent ($)</label>
+    <input id="tn-rent" type="number" inputmode="decimal" placeholder="0.00" value="${t?escAttr(t['Monthly Rent']):''}">
+    <label class="input-label" style="margin-bottom:6px">Security Deposit ($)</label>
+    <input id="tn-deposit" type="number" inputmode="decimal" placeholder="0.00" value="${t?escAttr(t['Security Deposit']):''}">
+    <label class="input-label" style="margin-bottom:6px">Status</label>
+    <select id="tn-status">${statusOpts}</select>
+    <label class="input-label" style="margin-bottom:6px">Notes</label>
+    <textarea id="tn-notes" placeholder="Notes (court dates, arrangements, etc.)…">${t?esc(t['Notes']):''}</textarea>
+    <div class="sheet-btns"><button class="btn-cancel" onclick="closeSheet()">Cancel</button><button class="btn-confirm-approve" onclick="confirmTenantSave()">✓ Save</button></div>`);
+}
+
+async function confirmTenantSave(){
+  if(!pendingAction||pendingAction.type!=='tenant')return;
+  const property=document.getElementById('tn-property').value.trim();
+  const name=document.getElementById('tn-name').value.trim();
+  if(!property||!name){alert('Property and Tenant Name are required');return;}
+  const params={
+    property,
+    unit:document.getElementById('tn-unit').value.trim(),
+    tenantName:name,
+    phone:document.getElementById('tn-phone').value.trim(),
+    email:document.getElementById('tn-email').value.trim(),
+    leaseStart:document.getElementById('tn-lease-start').value,
+    leaseEnd:document.getElementById('tn-lease-end').value,
+    monthlyRent:document.getElementById('tn-rent').value.trim(),
+    securityDeposit:document.getElementById('tn-deposit').value.trim(),
+    status:document.getElementById('tn-status').value,
+    notes:document.getElementById('tn-notes').value.trim(),
+  };
+  const id=pendingAction.id;
+  closeSheet();
+  document.getElementById('main-content').innerHTML='<div class="loading">Saving…</div>';
+  try{
+    if(id){params.action='updateTenant';params.id=id;}
+    else params.action='addTenant';
+    const r=await api(params);
+    if(r&&r.success===false){alert(r.error||'Error saving.');}
+    await loadTenants();
+  }catch(e){alert('Error saving.');render();}
+}
+
+// ─── TENANT CARD ───
+function tenantCard(t){
+  const id=String(t['ID']);
+  const days=leaseDaysLeft(t);
+  const status=String(t['Status']||'Current');
+  const isVacantOrGone=/vacant|moved out/i.test(status);
+  let leaseFlag='';
+  if(!isVacantOrGone&&days!==null){
+    if(days<0)leaseFlag=`<span class="pill pill-red">⚠️ Lease expired ${Math.abs(days)}d ago</span>`;
+    else if(days===0)leaseFlag=`<span class="pill pill-red">⚠️ Lease ends today</span>`;
+    else if(days<=60)leaseFlag=`<span class="pill pill-orange">⏰ Lease ends in ${days}d</span>`;
+  }
+  const rent=t['Monthly Rent']!==''&&t['Monthly Rent']!==undefined&&t['Monthly Rent']!==null?fmt(t['Monthly Rent']):'—';
+  const phone=String(t['Phone']||'').trim();
+  const email=String(t['Email']||'').trim();
+  const notes=String(t['Notes']||'').trim();
+  return `<div class="card">
+    <div class="card-row"><div class="card-vendor">${esc(t['Tenant Name']||'—')}</div><div class="card-amount">${rent}<span style="font-size:12px;color:#999;font-weight:600">/mo</span></div></div>
+    <div class="card-prop">📍 ${esc(t['Property']||'—')}${t['Unit']?' · '+esc(t['Unit']):''}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+      <span class="pill ${tenantStatusPill(status)}">${esc(status)}</span>
+      ${leaseFlag}
+    </div>
+    <div class="tenant-detail"><span class="td-label">Lease</span><span class="td-value">${fmtLeaseDate(t['Lease Start'])} → ${fmtLeaseDate(t['Lease End'])}</span></div>
+    ${phone?`<div class="tenant-detail"><span class="td-label">Phone</span><span class="td-value"><a href="tel:${escAttr(phone)}">${esc(phone)}</a></span></div>`:''}
+    ${email?`<div class="tenant-detail"><span class="td-label">Email</span><span class="td-value"><a href="mailto:${escAttr(email)}">${esc(email)}</a></span></div>`:''}
+    ${t['Security Deposit']?`<div class="tenant-detail"><span class="td-label">Deposit</span><span class="td-value">${fmt(t['Security Deposit'])}</span></div>`:''}
+    ${notes?`<div class="card-note" style="margin-top:10px;margin-bottom:0">📝 ${esc(notes)}</div>`:''}
+    ${canEditTenants()?`<button class="btn-edit-tenant" data-id="${escAttr(id)}" onclick="openTenantSheet(this.dataset.id)">✏️ Edit</button>`:''}
+  </div>`;
+}
+
+function tenantMatchesSearch(t){
+  if(!tenantSearch)return true;
+  const q=tenantSearch.toLowerCase();
+  return ['Tenant Name','Property','Unit','Phone','Email'].some(f=>String(t[f]||'').toLowerCase().includes(q));
+}
+
+function tenantListHTML(list){
+  if(!list.length)return `<div class="empty"><div class="empty-icon">👥</div><div class="empty-title">No tenants found</div><div class="empty-sub">${tenantSearch?'Try a different search.':'Tap ＋ Add Tenant to create the first record.'}</div></div>`;
+  return list.map(t=>tenantCard(t)).join('');
+}
+
+function updateTenantList(baseListFn){
+  const el=document.getElementById('tenant-list');
+  if(el)el.innerHTML=tenantListHTML(baseListFn());
 }
 
 // ─── TICKET CARD ───
@@ -662,6 +846,65 @@ function renderMaintDash(c){
   c.innerHTML=html;
 }
 
+// ─── TENANT RENDERS ───
+function currentTenantsList(){
+  return tenants.filter(t=>{
+    const s=String(t['Status']||'Current').toLowerCase();
+    if(s==='vacant'||s==='moved out')return false;
+    if(activeFilter!=='All'&&(t['Property']||'Other')!==activeFilter)return false;
+    return tenantMatchesSearch(t);
+  });
+}
+function expiringTenantsList(){
+  return tenants.filter(t=>{
+    const s=String(t['Status']||'Current').toLowerCase();
+    if(s==='vacant'||s==='moved out')return false;
+    const days=leaseDaysLeft(t);
+    if(days===null||days>60)return false;
+    return tenantMatchesSearch(t);
+  }).sort((a,b)=>(leaseDaysLeft(a)??9999)-(leaseDaysLeft(b)??9999));
+}
+function allTenantsList(){
+  return tenants.filter(t=>{
+    if(activeFilter!=='All'&&(t['Status']||'Current')!==activeFilter)return false;
+    return tenantMatchesSearch(t);
+  });
+}
+
+function tenantPageShell(sub,chipsHTML,listFnName,listHTML){
+  let html=userHeader(sub);
+  if(canEditTenants())html+=`<button class="btn-add-tenant" onclick="openTenantSheet()">＋ Add Tenant</button>`;
+  html+=`<input class="search-box" id="tenant-search" placeholder="🔍 Search name, property, unit, phone…" value="${escAttr(tenantSearch)}" oninput="tenantSearch=this.value;updateTenantList(${listFnName})">`;
+  html+=chipsHTML;
+  html+=`<div id="tenant-list">${listHTML}</div>`;
+  return html;
+}
+
+function renderTenantsCurrent(c){
+  const active=tenants.filter(t=>{const s=String(t['Status']||'Current').toLowerCase();return s!=='vacant'&&s!=='moved out';});
+  const totalRent=active.reduce((s,t)=>s+(Number(t['Monthly Rent'])||0),0);
+  const list=currentTenantsList();
+  let html=tenantPageShell(`${active.length} current tenants · ${fmt(totalRent)}/mo`,filterChips(active,'Property'),'currentTenantsList',tenantListHTML(list));
+  c.innerHTML=html;
+}
+
+function renderTenantsExpiring(c){
+  const list=expiringTenantsList();
+  const expired=list.filter(t=>(leaseDaysLeft(t)??0)<0).length;
+  let html=userHeader(`${list.length} leases expiring ≤60 days`);
+  if(canEditTenants())html+=`<button class="btn-add-tenant" onclick="openTenantSheet()">＋ Add Tenant</button>`;
+  html+=`<input class="search-box" id="tenant-search" placeholder="🔍 Search name, property, unit, phone…" value="${escAttr(tenantSearch)}" oninput="tenantSearch=this.value;updateTenantList(expiringTenantsList)">`;
+  if(list.length)html+=`<div class="summary"><div class="summary-item"><div class="summary-val" style="color:#ff3b30">${expired}</div><div class="summary-lbl">Expired</div></div><div class="summary-item"><div class="summary-val" style="color:#ea580c">${list.length-expired}</div><div class="summary-lbl">Ending soon</div></div></div>`;
+  html+=`<div id="tenant-list">${list.length?tenantListHTML(list):`<div class="empty"><div class="empty-icon">✅</div><div class="empty-title">No leases expiring soon</div><div class="empty-sub">Nothing ends in the next 60 days.</div></div>`}</div>`;
+  c.innerHTML=html;
+}
+
+function renderTenantsAll(c){
+  const list=allTenantsList();
+  let html=tenantPageShell(`${tenants.length} total records`,filterChips(tenants,'Status'),'allTenantsList',tenantListHTML(list));
+  c.innerHTML=html;
+}
+
 // ─── SETTINGS ───
 function renderSettings(c){
   let html=userHeader('Settings');
@@ -675,7 +918,7 @@ function renderSettings(c){
     <div style="margin-bottom:8px"><strong>Name:</strong> ${esc(currentUser.name)}</div>
     <div style="margin-bottom:8px"><strong>Email:</strong> ${esc(currentUser.email)}</div>
     <div><strong>Role:</strong> ${esc(currentUser.role)}</div></div></div>`;
-  html+=`<div class="settings-card"><div class="settings-title">ℹ️ About</div><div style="font-size:14px;color:#888">SkyHi Management v4.0</div></div>`;
+  html+=`<div class="settings-card"><div class="settings-title">ℹ️ About</div><div style="font-size:14px;color:#888">SkyHi Management v5.0 · Invoices · Maintenance · Tenants</div></div>`;
   c.innerHTML=html;
 }
 
@@ -723,7 +966,7 @@ async function renderSummary(c){
     c.innerHTML=html;
   }catch(e){c.innerHTML='<div class="loading">Error loading summary.</div>';}
 }
-  
+
 // INIT
 document.getElementById('main-view').style.display='none';
 document.getElementById('login-view').style.display='flex';
