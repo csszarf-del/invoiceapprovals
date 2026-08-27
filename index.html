@@ -278,6 +278,21 @@ async function api(params){
     catch(e){const m=text.match(/\((.+)\)/s);if(m)return JSON.parse(m[1]);throw e;}
   }catch(err){console.error('API error:',err);throw err;}
 }
+// Used when the payload is too big for a URL — photos, mainly.
+// text/plain avoids a CORS preflight, which Apps Script can't respond to.
+async function apiPost(params){
+  params.token=API_TOKEN;
+  try{
+    const res=await fetch(SCRIPT_URL,{
+      method:'POST',redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify(params)
+    });
+    const text=await res.text();
+    try{return JSON.parse(text);}
+    catch(e){const m=text.match(/\((.+)\)/s);if(m)return JSON.parse(m[1]);throw e;}
+  }catch(err){console.error('API POST error:',err);throw err;}
+}
 // ─── AUTO LOGOUT ───
 function resetAutoLogout(){
   if(autoLogoutTimer)clearTimeout(autoLogoutTimer);
@@ -328,7 +343,7 @@ function buildModuleSwitch(){
   sw.innerHTML=mods.map(m=>`<button class="mod-btn${m===currentModule?' active':''}" id="mod-${m}" onclick="switchModule('${m}')">${MODULE_META[m].icon} ${MODULE_META[m].label}</button>`).join('');
 }
 function switchModule(mod){
-  currentModule=mod;activeFilter='All';tenantSearch='';garbageAddrSearch='';garbageAddrPick=null;
+  currentModule=mod;activeFilter='All';tenantSearch='';garbageAddrSearch='';garbageAddrPick=null;garbagePhotos=[];
   buildModuleSwitch();
   setupModule();
 }
@@ -357,7 +372,7 @@ function buildNav(tabs){
   nav.innerHTML=all.map(t=>`<button class="nav-btn${t.id===currentTab?' active':''}" id="nav-${t.id}" onclick="switchTab('${t.id}')"><span class="nav-icon">${t.icon}</span>${t.label}</button>`).join('');
 }
 function logout(){
-  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';tenantSearch='';garbageAddrSearch='';garbageAddrPick=null;
+  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';tenantSearch='';garbageAddrSearch='';garbageAddrPick=null;garbagePhotos=[];
   invoices=[];tickets=[];ticketStats=null;tenants=[];allUsers=[];garbage=[];properties=[];
   if(autoLogoutTimer)clearTimeout(autoLogoutTimer);
   document.getElementById('login-email').value='';document.getElementById('login-pin').value='';
@@ -1103,6 +1118,74 @@ function updateAddrChosen(){
   el.innerHTML=`<span style="flex:1">✓ <b>${esc(garbageAddrPick.address)}</b> · ${esc(garbageAddrPick.city)}</span>
     <button type="button" onclick="clearAddr()" style="background:none;border:none;color:var(--accent);font-weight:600;font-size:14px;cursor:pointer;padding:0 2px">Change</button>`;
 }
+// ─── PHOTOS ───
+// Phone cameras produce 3–5MB files. We shrink to ~1200px / 65% JPEG before
+// sending, so a report uploads in seconds even on a weak signal.
+const MAX_PHOTOS=3;
+let garbagePhotos=[]; // array of data: URLs, already shrunk
+function shrinkImage(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('Could not read that file'));
+    reader.onload=()=>{
+      const img=new Image();
+      img.onerror=()=>reject(new Error('That file is not an image'));
+      img.onload=()=>{
+        const MAX=1200;
+        let w=img.width,h=img.height;
+        if(w>h&&w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+        else if(h>=w&&h>MAX){w=Math.round(w*MAX/h);h=MAX;}
+        const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+        cv.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(cv.toDataURL('image/jpeg',0.65));
+      };
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+async function onPhotoPick(input){
+  const files=Array.from(input.files||[]);
+  input.value='';
+  if(!files.length)return;
+  const room=MAX_PHOTOS-garbagePhotos.length;
+  if(room<=0){alert('You can attach up to '+MAX_PHOTOS+' photos.');return;}
+  const status=document.getElementById('g-photo-status');
+  if(status){status.style.display='block';status.textContent='Shrinking photo…';}
+  for(const f of files.slice(0,room)){
+    try{garbagePhotos.push(await shrinkImage(f));}
+    catch(e){alert(e.message||'Could not use that photo.');}
+  }
+  if(status)status.style.display='none';
+  renderPhotoStrip();
+}
+function removePhoto(i){garbagePhotos.splice(Number(i),1);renderPhotoStrip();}
+function renderPhotoStrip(){
+  const strip=document.getElementById('g-photos');
+  const btn=document.getElementById('g-photo-btn');
+  if(!strip)return;
+  if(btn)btn.textContent=garbagePhotos.length?`📷 Add another photo (${garbagePhotos.length}/${MAX_PHOTOS})`:'📷 Add a photo (optional)';
+  if(btn)btn.style.display=garbagePhotos.length>=MAX_PHOTOS?'none':'block';
+  strip.innerHTML=garbagePhotos.map((src,i)=>`<div style="position:relative;flex:0 0 auto">
+    <img src="${src}" style="width:84px;height:84px;object-fit:cover;border-radius:var(--r-sm);border:0.5px solid var(--hairline)">
+    <button type="button" data-i="${i}" onclick="removePhoto(this.dataset.i)" aria-label="Remove photo"
+      style="position:absolute;top:-7px;right:-7px;width:24px;height:24px;border-radius:50%;border:none;background:var(--red);color:#fff;font-size:14px;line-height:1;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.3)">✕</button>
+  </div>`).join('');
+  strip.style.display=garbagePhotos.length?'flex':'none';
+}
+// Drive stores a /file/d/<id>/view link; this turns it into a thumbnail.
+function driveThumb(url,size){
+  const m=String(url).match(/\/d\/([A-Za-z0-9_-]+)/);
+  return m?'https://drive.google.com/thumbnail?id='+m[1]+'&sz=w'+(size||400):url;
+}
+function photoStripHTML(photosCell){
+  const urls=String(photosCell||'').split(',').map(s=>s.trim()).filter(Boolean);
+  if(!urls.length)return '';
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">`+urls.map(u=>
+    `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(driveThumb(u,400))}" loading="lazy"
+      style="width:76px;height:76px;object-fit:cover;border-radius:var(--r-sm);border:0.5px solid var(--hairline);background:var(--fill)"></a>`
+  ).join('')+`</div>`;
+}
 function checkDupWarning(){
   const box=document.getElementById('g-dup');
   if(!box)return;
@@ -1141,9 +1224,15 @@ function renderGarbageReport(c){
     </select>
     <label class="input-label" style="margin-bottom:6px">What is it? (optional)</label>
     <textarea id="g-note" placeholder="e.g. old mattress and a couch" style="width:100%;border:0.5px solid var(--hairline);border-radius:var(--r-md);padding:15px;font-size:16px;font-family:inherit;background:var(--card);color:var(--text);height:90px;resize:none;margin-bottom:14px"></textarea>
+    <label class="input-label" style="margin-bottom:6px">Photos (optional)</label>
+    <input type="file" id="g-photo-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this)">
+    <div id="g-photos" style="display:none;gap:10px;flex-wrap:wrap;margin-bottom:10px"></div>
+    <div id="g-photo-status" style="display:none;font-size:14px;color:var(--muted);margin-bottom:10px"></div>
+    <button type="button" class="btn-action" id="g-photo-btn" style="margin-bottom:16px" onclick="document.getElementById('g-photo-input').click()">📷 Add a photo (optional)</button>
     <button class="btn-approve" id="g-submit" onclick="submitGarbageReport()">✓ Submit Report</button>
   </div>`;
   c.innerHTML=html;
+  renderPhotoStrip();
 }
 async function submitGarbageReport(){
   // If they typed the address exactly right but never tapped the list, accept it.
@@ -1160,12 +1249,18 @@ async function submitGarbageReport(){
   const note=document.getElementById('g-note').value.trim();
   if(!loc){alert('Please pick where at the building the garbage is');return;}
   const btn=document.getElementById('g-submit');
-  btn.disabled=true;btn.textContent='Saving…';
+  btn.disabled=true;btn.textContent=garbagePhotos.length?'Uploading photo…':'Saving…';
   try{
-    const r=await api({action:'addGarbage',address,city,location:loc,note,dateReported:date,reportedBy:currentUser.name});
+    // No photos? Use the plain GET call that every other screen uses.
+    // Only a report carrying photos needs the POST path.
+    const payload={action:'addGarbage',address,city,location:loc,note,dateReported:date,reportedBy:currentUser.name};
+    const r=garbagePhotos.length
+      ? await apiPost(Object.assign({},payload,{photos:garbagePhotos}))
+      : await api(payload);
     if(r&&r.success===false){alert(r.error||'Error saving.');btn.disabled=false;btn.textContent='✓ Submit Report';return;}
+    if(r&&r.warning)alert(r.warning);
     garbageFlash='Reported: '+address+(city?' ('+city+')':'');
-    garbageAddrSearch='';garbageAddrPick=null;
+    garbageAddrSearch='';garbageAddrPick=null;garbagePhotos=[];
     await loadGarbage();
   }catch(e){alert('Error saving. Check your signal and try again.');btn.disabled=false;btn.textContent='✓ Submit Report';}
 }
@@ -1178,7 +1273,7 @@ function garbageGroupCard(g){
     lines+=`<div class="tenant-detail" style="align-items:flex-start">
       <span class="td-label" style="white-space:nowrap">${esc(fmtLeaseDate(r['Date Reported']))}</span>
       <span class="td-value" style="text-align:right;font-weight:500">${esc(r['Location']||'—')}${r['Note']?'<br><span style="color:var(--muted);font-weight:400">'+esc(r['Note'])+'</span>':''}<br><span style="color:var(--muted);font-weight:400;font-size:12px">by ${esc(r['Reported By']||'—')}</span></span>
-    </div>`;
+    </div>${photoStripHTML(r['Photos'])}`;
   });
   return `<div class="card">
     <div class="card-row"><div class="card-vendor">${esc(g.address)}</div>${n>1?`<span class="pill pill-red">${n} reports</span>`:''}</div>
@@ -1247,6 +1342,7 @@ function garbageHistoryCard(r){
     <div class="card-row"><div class="card-vendor">${esc(r['Address']||'—')}</div><span class="pill ${pill}">${esc(st||'Open')}</span></div>
     <div class="card-prop">📍 ${esc(r['City']||'—')}${r['Location']?' · '+esc(r['Location']):''}</div>
     ${r['Note']?`<div class="card-note">${esc(r['Note'])}</div>`:''}
+    ${photoStripHTML(r['Photos'])}
     <div class="tenant-detail"><span class="td-label">Reported</span><span class="td-value">${esc(fmtLeaseDate(r['Date Reported']))} by ${esc(r['Reported By']||'—')}</span></div>
     ${r['Pickup Date']?`<div class="tenant-detail"><span class="td-label">Picked up</span><span class="td-value">${esc(fmtLeaseDate(r['Pickup Date']))}${r['Picked Up By']?' by '+esc(r['Picked Up By']):''}</span></div>`:''}
   </div>`;
