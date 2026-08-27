@@ -161,6 +161,10 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);max-wid
 .tenant-detail .td-label{color:var(--muted)}
 .tenant-detail .td-value{font-weight:600;text-align:right}
 .tenant-detail a{color:var(--accent);text-decoration:none;font-weight:600}
+.addr-list{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;background:var(--card);border:0.5px solid var(--hairline);border-radius:var(--r-md);box-shadow:0 8px 28px rgba(11,18,32,0.16);max-height:296px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.addr-opt{display:block;width:100%;text-align:left;background:none;border:none;border-bottom:0.5px solid var(--hairline2);padding:13px 16px;font-family:inherit;font-size:16px;color:var(--text);cursor:pointer}
+.addr-opt:last-child{border-bottom:none}
+.addr-opt:active{background:var(--accent-soft)}
 </style>
 </head>
 <body>
@@ -218,13 +222,14 @@ const TENANT_TABS={
   admin:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
   manager:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
   viewer:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
-  dispatcher:[],fieldworker:[],payment:[],hauler:[],
+  dispatcher:[],fieldworker:[],payment:[],hauler:[],garbagecrew:[],
 };
 const GARBAGE_TABS={
   admin:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_report',icon:'➕',label:'Report'},{id:'g_all',icon:'📋',label:'History'}],
   dispatcher:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_report',icon:'➕',label:'Report'},{id:'g_all',icon:'📋',label:'History'}],
-  manager:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_all',icon:'📋',label:'History'}],
+  manager:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_report',icon:'➕',label:'Report'},{id:'g_all',icon:'📋',label:'History'}],
   fieldworker:[{id:'g_report',icon:'➕',label:'Report'},{id:'g_open',icon:'🗑',label:'Outstanding'}],
+  garbagecrew:[{id:'g_report',icon:'➕',label:'Report'},{id:'g_open',icon:'🗑',label:'Outstanding'}],
   hauler:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_done',icon:'✅',label:'Done'}],
   viewer:[],payment:[],
 };
@@ -236,6 +241,7 @@ const ROLE_MODULES={
   viewer:['invoices','maintenance','tenants'],
   payment:['invoices'],
   hauler:['garbage'],
+  garbagecrew:['garbage'],
 };
 const MODULE_META={
   invoices:{icon:'📄',label:'Invoices'},
@@ -322,7 +328,7 @@ function buildModuleSwitch(){
   sw.innerHTML=mods.map(m=>`<button class="mod-btn${m===currentModule?' active':''}" id="mod-${m}" onclick="switchModule('${m}')">${MODULE_META[m].icon} ${MODULE_META[m].label}</button>`).join('');
 }
 function switchModule(mod){
-  currentModule=mod;activeFilter='All';tenantSearch='';garbageAddrSearch='';
+  currentModule=mod;activeFilter='All';tenantSearch='';garbageAddrSearch='';garbageAddrPick=null;
   buildModuleSwitch();
   setupModule();
 }
@@ -337,7 +343,7 @@ function setupModule(){
     buildNav(tabs);loadTenants();
   }else if(currentModule==='garbage'){
     const tabs=GARBAGE_TABS[currentUser.role]||GARBAGE_TABS.manager;
-    currentTab=currentUser.role==='fieldworker'?'g_report':'g_open';
+    currentTab=(currentUser.role==='fieldworker'||currentUser.role==='garbagecrew')?'g_report':'g_open';
     buildNav(tabs);loadGarbage();
   }else{
     const tabs=MAINT_TABS[currentUser.role]||MAINT_TABS.manager;
@@ -351,7 +357,7 @@ function buildNav(tabs){
   nav.innerHTML=all.map(t=>`<button class="nav-btn${t.id===currentTab?' active':''}" id="nav-${t.id}" onclick="switchTab('${t.id}')"><span class="nav-icon">${t.icon}</span>${t.label}</button>`).join('');
 }
 function logout(){
-  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';tenantSearch='';garbageAddrSearch='';
+  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';tenantSearch='';garbageAddrSearch='';garbageAddrPick=null;
   invoices=[];tickets=[];ticketStats=null;tenants=[];allUsers=[];garbage=[];properties=[];
   if(autoLogoutTimer)clearTimeout(autoLogoutTimer);
   document.getElementById('login-email').value='';document.getElementById('login-pin').value='';
@@ -435,7 +441,7 @@ function render(){
   else if(currentTab==='settings')renderSettings(c);
 }
 function userHeader(sub){
-  const colors={admin:'background:#fef9c3;color:#ca8a04',manager:'background:#dbeafe;color:#1d4ed8',payment:'background:#dcfce7;color:#16a34a',viewer:'background:#e8e8e8;color:#666',dispatcher:'background:#fce8ff;color:#a855f7',fieldworker:'background:#fff7ed;color:#ea580c',hauler:'background:#e6f6ec;color:#16a34a'};
+  const colors={admin:'background:#fef9c3;color:#ca8a04',manager:'background:#dbeafe;color:#1d4ed8',payment:'background:#dcfce7;color:#16a34a',viewer:'background:#e8e8e8;color:#666',dispatcher:'background:#fce8ff;color:#a855f7',fieldworker:'background:#fff7ed;color:#ea580c',hauler:'background:#e6f6ec;color:#16a34a',garbagecrew:'background:#e7edfd;color:#1d4ed8'};
   return `<div class="user-header"><div class="user-av" style="${colors[currentUser.role]||''}">${currentUser.init}</div><div><div class="user-name">${esc(currentUser.name)}</div><div class="user-sub">${esc(sub)}</div></div><button class="signout" onclick="logout()">Sign out</button></div>`;
 }
 function invoiceAge(d){if(!d)return '';const dt=new Date(d),now=new Date(),days=Math.floor((now-dt)/864e5);if(days<=0)return 'Today';if(days===1)return '1 day ago';if(days<=30)return days+' days ago';if(days<=60)return '1 month ago';return Math.floor(days/30)+' months ago';}
@@ -976,15 +982,32 @@ function renderTenantsAll(c){
 // ═══ BULK GARBAGE ═══
 let garbageFlash='';
 function todayStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
-function daysSince(s){const d=parseLeaseDate(s);if(!d)return null;const n=new Date();n.setHours(0,0,0,0);return Math.round((n-d)/864e5);}
-function waitLabel(days){
+// Business days only — the crew works Mon–Fri, so a Friday report is still
+// "1 day" on Monday, not 3. Counts weekdays AFTER the report date.
+// (Public holidays are not accounted for.)
+function daysSince(s){
+  const d=parseLeaseDate(s);if(!d)return null;
+  const now=new Date();now.setHours(0,0,0,0);
+  d.setHours(0,0,0,0);
+  if(d>=now)return 0;
+  let n=0;const cur=new Date(d);
+  while(cur<now){
+    cur.setDate(cur.getDate()+1);
+    const dow=cur.getDay();
+    if(dow!==0&&dow!==6)n++;
+  }
+  return n;
+}
+function waitLabel(days,dateStr){
   if(days===null)return '';
-  if(days<=0)return 'Reported today';
-  if(days===1)return 'Waiting 1 day';
-  return 'Waiting '+days+' days';
+  // 0 business days can mean "reported today" OR "reported Friday, it's Sunday".
+  if(days<=0)return (dateStr&&String(dateStr).slice(0,10)!==todayStr())
+    ? 'Waiting since '+fmtLeaseDate(dateStr) : 'Reported today';
+  if(days===1)return 'Waiting 1 business day';
+  return 'Waiting '+days+' business days';
 }
 function canPickup(){return currentUser&&['hauler','admin','dispatcher'].indexOf(currentUser.role)>=0;}
-function canReportGarbage(){return currentUser&&['fieldworker','admin','dispatcher','manager'].indexOf(currentUser.role)>=0;}
+function canReportGarbage(){return currentUser&&['fieldworker','garbagecrew','admin','dispatcher','manager'].indexOf(currentUser.role)>=0;}
 function canCancelGarbage(){return currentUser&&currentUser.role==='admin';}
 // Group every still-open report by address, so three days of duplicates
 // show as ONE card with a count — not three separate jobs.
@@ -1011,37 +1034,81 @@ function openCountFor(address){
   return garbage.filter(g=>String(g['Status']||'')==='Open'&&String(g['Address']||'').trim().toLowerCase()===t).length;
 }
 // ─── REPORT FORM (the crew) ───
-function addrOptionsHTML(selected){
+// Type-ahead: one box. Start typing, matching addresses drop down underneath,
+// tap one and it replaces what you typed. No second dropdown to hunt through.
+let garbageAddrPick=null; // {address, city} once a real address is chosen
+function matchingProps(){
   const q=garbageAddrSearch.trim().toLowerCase();
-  const list=properties.filter(p=>{
-    if(!q)return true;
-    // Never hide an address the user has already picked, even if the
-    // filter text no longer matches it — otherwise the pick vanishes silently.
-    if(selected&&String(p['Address'])===selected)return true;
-    return (String(p['Address']||'')+' '+String(p['City']||'')).toLowerCase().includes(q);
+  if(!q)return properties.slice(0,60);
+  const words=q.split(/\s+/).filter(Boolean);
+  const scored=[];
+  properties.forEach((p,i)=>{
+    const hay=(String(p['Address']||'')+' '+String(p['City']||'')).toLowerCase();
+    if(!words.every(w=>hay.includes(w)))return;
+    // A match at the very start ranks above a match in the middle.
+    scored.push({i:i,rank:hay.indexOf(words[0])===0?0:1});
   });
-  let h='<option value="">Select an address…</option>';
-  list.forEach(p=>{
-    const a=String(p['Address']||'');
-    const city=String(p['City']||'');
-    h+=`<option value="${escAttr(a)}" data-city="${escAttr(city)}"${a===selected?' selected':''}>${esc(a)} — ${esc(city)}</option>`;
-  });
-  if(!list.length)h+='<option value="" disabled>No address matches that search</option>';
-  return h;
+  scored.sort((a,b)=>a.rank-b.rank||a.i-b.i);
+  return scored.slice(0,60).map(s=>properties[s.i]);
 }
-function updateAddrOptions(){
-  const sel=document.getElementById('g-addr');
-  if(!sel)return;
-  const cur=sel.value;
-  sel.innerHTML=addrOptionsHTML(cur);
+function renderAddrList(show){
+  const box=document.getElementById('g-addr-list');
+  if(!box)return;
+  if(!show){box.style.display='none';return;}
+  const list=matchingProps();
+  if(!list.length){
+    box.style.display='block';
+    box.innerHTML='<div style="padding:14px 16px;color:var(--muted);font-size:15px">No address matches that. Check the spelling, or clear the box to see them all.</div>';
+    return;
+  }
+  box.style.display='block';
+  box.innerHTML=list.map(p=>{
+    const idx=properties.indexOf(p);
+    return `<button type="button" class="addr-opt" data-idx="${idx}" onclick="pickAddr(this.dataset.idx)">
+      <span style="font-weight:600">${esc(String(p['Address']||''))}</span>
+      <span style="color:var(--muted);font-size:13px;display:block;margin-top:2px">${esc(String(p['City']||''))}</span>
+    </button>`;
+  }).join('');
+}
+function onAddrInput(v){
+  garbageAddrSearch=v;
+  garbageAddrPick=null;      // typing means they're choosing again
+  renderAddrList(true);
+  updateAddrChosen();
   checkDupWarning();
 }
+function onAddrFocus(){ if(!garbageAddrPick) renderAddrList(true); }
+function pickAddr(idx){
+  const p=properties[Number(idx)];
+  if(!p)return;
+  garbageAddrPick={address:String(p['Address']||''),city:String(p['City']||'')};
+  garbageAddrSearch=garbageAddrPick.address;
+  const inp=document.getElementById('g-addr-input');
+  if(inp)inp.value=garbageAddrPick.address;   // the pick REPLACES what was typed
+  renderAddrList(false);
+  updateAddrChosen();
+  checkDupWarning();
+}
+function clearAddr(){
+  garbageAddrPick=null;garbageAddrSearch='';
+  const inp=document.getElementById('g-addr-input');
+  if(inp){inp.value='';inp.focus();}
+  renderAddrList(true);updateAddrChosen();checkDupWarning();
+}
+function updateAddrChosen(){
+  const el=document.getElementById('g-addr-chosen');
+  if(!el)return;
+  if(!garbageAddrPick){el.style.display='none';el.innerHTML='';return;}
+  el.style.display='flex';
+  el.innerHTML=`<span style="flex:1">✓ <b>${esc(garbageAddrPick.address)}</b> · ${esc(garbageAddrPick.city)}</span>
+    <button type="button" onclick="clearAddr()" style="background:none;border:none;color:var(--accent);font-weight:600;font-size:14px;cursor:pointer;padding:0 2px">Change</button>`;
+}
 function checkDupWarning(){
-  const sel=document.getElementById('g-addr');
   const box=document.getElementById('g-dup');
-  if(!sel||!box)return;
-  const n=openCountFor(sel.value);
-  if(!sel.value||n===0){box.style.display='none';box.innerHTML='';return;}
+  if(!box)return;
+  const addr=garbageAddrPick?garbageAddrPick.address:'';
+  const n=addr?openCountFor(addr):0;
+  if(!addr||n===0){box.style.display='none';box.innerHTML='';return;}
   box.style.display='block';
   box.innerHTML=`⚠️ This address already has <b>${n}</b> open report${n>1?'s':''} waiting for pickup. You can still add this one — they'll all close together when it's picked up.`;
 }
@@ -1059,8 +1126,13 @@ function renderGarbageReport(c){
     <label class="input-label" style="margin-bottom:6px">Date noticed</label>
     <input class="input-field" id="g-date" type="date" value="${todayStr()}" style="margin-bottom:14px">
     <label class="input-label" style="margin-bottom:6px">Address *</label>
-    <input class="search-box" id="g-addr-search" placeholder="🔍 Type to narrow the list…" value="${escAttr(garbageAddrSearch)}" oninput="garbageAddrSearch=this.value;updateAddrOptions()" style="margin-bottom:8px">
-    <select id="g-addr" onchange="checkDupWarning()" style="width:100%;border:0.5px solid var(--hairline);border-radius:var(--r-md);padding:15px;font-size:16px;font-family:inherit;background:var(--card);color:var(--text);-webkit-appearance:none;appearance:none;margin-bottom:10px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%238b8f9c' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 16px center;padding-right:42px;">${addrOptionsHTML('')}</select>
+    <div style="position:relative;margin-bottom:10px">
+      <input class="search-box" id="g-addr-input" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
+        placeholder="Start typing, e.g. 135 or Grumman…" value="${escAttr(garbageAddrPick?garbageAddrPick.address:garbageAddrSearch)}"
+        oninput="onAddrInput(this.value)" onfocus="onAddrFocus()" style="margin-bottom:0">
+      <div id="g-addr-list" class="addr-list" style="display:none"></div>
+    </div>
+    <div id="g-addr-chosen" style="display:none;align-items:center;gap:8px;background:var(--green-soft);color:var(--green);padding:11px 13px;border-radius:var(--r-sm);font-size:14px;line-height:1.4;margin-bottom:12px"></div>
     <div id="g-dup" style="display:none;background:var(--amber-soft);color:var(--amber);padding:11px 13px;border-radius:var(--r-sm);font-size:14px;line-height:1.4;margin-bottom:14px"></div>
     <label class="input-label" style="margin-bottom:6px">Where at the building *</label>
     <select id="g-loc" style="width:100%;border:0.5px solid var(--hairline);border-radius:var(--r-md);padding:15px;font-size:16px;font-family:inherit;background:var(--card);color:var(--text);-webkit-appearance:none;appearance:none;margin-bottom:14px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%238b8f9c' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 16px center;padding-right:42px;">
@@ -1074,29 +1146,33 @@ function renderGarbageReport(c){
   c.innerHTML=html;
 }
 async function submitGarbageReport(){
-  const sel=document.getElementById('g-addr');
-  const address=sel?sel.value:'';
+  // If they typed the address exactly right but never tapped the list, accept it.
+  if(!garbageAddrPick){
+    const typed=(document.getElementById('g-addr-input')||{}).value||'';
+    const hit=properties.find(p=>String(p['Address']||'').toLowerCase()===typed.trim().toLowerCase());
+    if(hit)garbageAddrPick={address:String(hit['Address']),city:String(hit['City']||'')};
+  }
+  if(!garbageAddrPick){alert('Please tap an address from the list so we record it exactly.');return;}
+  const address=garbageAddrPick.address;
+  const city=garbageAddrPick.city;
   const loc=document.getElementById('g-loc').value;
   const date=document.getElementById('g-date').value||todayStr();
   const note=document.getElementById('g-note').value.trim();
-  if(!address){alert('Please pick an address');return;}
   if(!loc){alert('Please pick where at the building the garbage is');return;}
-  const opt=sel.options[sel.selectedIndex];
-  const city=opt?(opt.getAttribute('data-city')||''):'';
   const btn=document.getElementById('g-submit');
   btn.disabled=true;btn.textContent='Saving…';
   try{
     const r=await api({action:'addGarbage',address,city,location:loc,note,dateReported:date,reportedBy:currentUser.name});
     if(r&&r.success===false){alert(r.error||'Error saving.');btn.disabled=false;btn.textContent='✓ Submit Report';return;}
     garbageFlash='Reported: '+address+(city?' ('+city+')':'');
-    garbageAddrSearch='';
+    garbageAddrSearch='';garbageAddrPick=null;
     await loadGarbage();
   }catch(e){alert('Error saving. Check your signal and try again.');btn.disabled=false;btn.textContent='✓ Submit Report';}
 }
 // ─── OUTSTANDING (one card per address) ───
 function garbageGroupCard(g){
   const n=g.reports.length;
-  const dayPill=g.days===null?'':(g.days>=7?'pill-red':g.days>=3?'pill-orange':'pill-blue');
+  const dayPill=g.days===null?'':(g.days>=5?'pill-red':g.days>=3?'pill-orange':'pill-blue');
   let lines='';
   g.reports.forEach(r=>{
     lines+=`<div class="tenant-detail" style="align-items:flex-start">
@@ -1108,7 +1184,7 @@ function garbageGroupCard(g){
     <div class="card-row"><div class="card-vendor">${esc(g.address)}</div>${n>1?`<span class="pill pill-red">${n} reports</span>`:''}</div>
     <div class="card-prop">📍 ${esc(g.city||'—')}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-      ${dayPill?`<span class="pill ${dayPill}">${esc(waitLabel(g.days))}</span>`:''}
+      ${dayPill?`<span class="pill ${dayPill}">${esc(waitLabel(g.days,g.oldest))}</span>`:''}
       <span class="pill pill-gray">First reported ${esc(fmtLeaseDate(g.oldest))}</span>
     </div>
     ${lines}
@@ -1128,7 +1204,7 @@ function renderGarbageOpen(c){
   html+=`<div class="summary">
     <div class="summary-item"><div class="summary-val">${groups.length}</div><div class="summary-lbl">Addresses</div></div>
     <div class="summary-item"><div class="summary-val">${totalReports}</div><div class="summary-lbl">Reports</div></div>
-    <div class="summary-item"><div class="summary-val" style="color:#ea580c">${stale}</div><div class="summary-lbl">3+ days</div></div>
+    <div class="summary-item"><div class="summary-val" style="color:#ea580c">${stale}</div><div class="summary-lbl">3+ work days</div></div>
   </div>`;
   html+=filterChips(groups.map(g=>({City:g.city})),'City');
   const filtered=activeFilter==='All'?groups:groups.filter(g=>(g.city||'Other')===activeFilter);
@@ -1203,11 +1279,12 @@ const ROLE_INFO={
   dispatcher:{label:'Dispatcher',desc:'Maintenance + garbage — can assign and close'},
   fieldworker:{label:'Field worker',desc:'Their own maintenance jobs + reporting bulk garbage'},
   hauler:{label:'Hauler',desc:'Bulk garbage pickup only — nothing else'},
+  garbagecrew:{label:'Garbage crew',desc:'Reporting bulk garbage only — no maintenance tickets'},
 };
-const ROLE_ORDER=['admin','manager','payment','viewer','dispatcher','fieldworker','hauler'];
+const ROLE_ORDER=['admin','manager','dispatcher','fieldworker','garbagecrew','hauler','payment','viewer'];
 function isAdmin(){return currentUser&&currentUser.role==='admin';}
 function roleAvColor(role){
-  const colors={admin:'background:#fef9c3;color:#ca8a04',manager:'background:#dbeafe;color:#1d4ed8',payment:'background:#dcfce7;color:#16a34a',viewer:'background:#e8e8e8;color:#666',dispatcher:'background:#fce8ff;color:#a855f7',fieldworker:'background:#fff7ed;color:#ea580c',hauler:'background:#e6f6ec;color:#16a34a'};
+  const colors={admin:'background:#fef9c3;color:#ca8a04',manager:'background:#dbeafe;color:#1d4ed8',payment:'background:#dcfce7;color:#16a34a',viewer:'background:#e8e8e8;color:#666',dispatcher:'background:#fce8ff;color:#a855f7',fieldworker:'background:#fff7ed;color:#ea580c',hauler:'background:#e6f6ec;color:#16a34a',garbagecrew:'background:#e7edfd;color:#1d4ed8'};
   return colors[role]||'background:#e8e8e8;color:#666';
 }
 function randomPin(){let s='';for(let i=0;i<8;i++)s+=Math.floor(Math.random()*10);return s;}
