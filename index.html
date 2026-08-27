@@ -164,7 +164,6 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);max-wid
 </style>
 </head>
 <body>
-
 <div id="login-view" class="login-wrap">
   <div class="header"><h1>🏢 SkyHi Management</h1></div>
   <div class="login-body">
@@ -185,7 +184,6 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);max-wid
     </div>
   </div>
 </div>
-
 <div id="main-view" style="display:none;width:100%">
   <div class="header">
     <h1 id="header-title">SkyHi Management</h1>
@@ -196,15 +194,12 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);max-wid
   <div class="page" id="main-content"></div>
   <div class="bottom-nav" id="bottom-nav"></div>
 </div>
-
 <div class="overlay" id="overlay" style="display:none" onclick="overlayClick(event)">
   <div class="sheet" id="action-sheet"></div>
 </div>
-
 <script>
 const SCRIPT_URL='https://script.google.com/macros/s/AKfycbyLKqK16tC3ohPCV3dqHBz0ohJVnfDGqSqfLFLBHSA8gnTxIaiNEXRGAK_YkNd-nEqy/exec';
 const API_TOKEN='SkyHi2026$ecure!';
-
 const INVOICE_TABS={
   manager:[{id:'pending',icon:'📋',label:'Pending'},{id:'done',icon:'✅',label:'Reviewed'}],
   payment:[{id:'payment',icon:'💳',label:'To Pay'}],
@@ -223,21 +218,36 @@ const TENANT_TABS={
   admin:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
   manager:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
   viewer:[{id:'t_current',icon:'👥',label:'Current'},{id:'t_expiring',icon:'⏰',label:'Expiring'},{id:'t_all',icon:'📋',label:'All'}],
-  dispatcher:[],fieldworker:[],payment:[],
+  dispatcher:[],fieldworker:[],payment:[],hauler:[],
+};
+const GARBAGE_TABS={
+  admin:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_report',icon:'➕',label:'Report'},{id:'g_all',icon:'📋',label:'History'}],
+  dispatcher:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_report',icon:'➕',label:'Report'},{id:'g_all',icon:'📋',label:'History'}],
+  manager:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_all',icon:'📋',label:'History'}],
+  fieldworker:[{id:'g_report',icon:'➕',label:'Report'},{id:'g_open',icon:'🗑',label:'Outstanding'}],
+  hauler:[{id:'g_open',icon:'🗑',label:'To Pick Up'},{id:'g_done',icon:'✅',label:'Done'}],
+  viewer:[],payment:[],
 };
 const ROLE_MODULES={
-  admin:['invoices','maintenance','tenants'],dispatcher:['maintenance'],fieldworker:['maintenance'],
-  manager:['invoices','maintenance','tenants'],viewer:['invoices','maintenance','tenants'],payment:['invoices'],
+  admin:['invoices','maintenance','tenants','garbage'],
+  dispatcher:['maintenance','garbage'],
+  fieldworker:['maintenance','garbage'],
+  manager:['invoices','maintenance','tenants','garbage'],
+  viewer:['invoices','maintenance','tenants'],
+  payment:['invoices'],
+  hauler:['garbage'],
 };
 const MODULE_META={
   invoices:{icon:'📄',label:'Invoices'},
   maintenance:{icon:'🔧',label:'Maintenance'},
   tenants:{icon:'👥',label:'Tenants'},
+  garbage:{icon:'🗑',label:'Garbage'},
 };
-
+// Where at the building the bulk garbage is sitting.
+const GARBAGE_LOCATIONS=['Curb / Front','Side of building','Back / Rear yard','Driveway','Alley','Basement','Inside vacant unit','Other'];
 let currentUser=null,currentModule='invoices',currentTab='pending';
 let invoices=[],tickets=[],ticketStats=null,tenants=[],allUsers=[],activeFilter='All',tenantSearch='',pendingAction=null,autoLogoutTimer=null;
-
+let garbage=[],properties=[],garbageAddrSearch='';
 // ─── UTILITIES ───
 function fmt(a){return '$'+Number(a).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function ini(name){return name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
@@ -252,7 +262,6 @@ function filterChips(items,field){
   }).join('')+'</div>';
 }
 function setFilter(f){activeFilter=f;render();}
-
 async function api(params){
   params.token=API_TOKEN;
   const url=SCRIPT_URL+'?'+new URLSearchParams(params);
@@ -263,7 +272,6 @@ async function api(params){
     catch(e){const m=text.match(/\((.+)\)/s);if(m)return JSON.parse(m[1]);throw e;}
   }catch(err){console.error('API error:',err);throw err;}
 }
-
 // ─── AUTO LOGOUT ───
 function resetAutoLogout(){
   if(autoLogoutTimer)clearTimeout(autoLogoutTimer);
@@ -271,17 +279,16 @@ function resetAutoLogout(){
 }
 document.addEventListener('touchstart',resetAutoLogout,{passive:true});
 document.addEventListener('click',resetAutoLogout);
-
 // ─── REFRESH ───
 async function doRefresh(){
   const btn=document.getElementById('refresh-btn');
   btn.classList.add('spinning');
   if(currentModule==='invoices')await loadInvoices();
   else if(currentModule==='tenants')await loadTenants();
+  else if(currentModule==='garbage')await loadGarbage();
   else{await loadTickets();await loadTicketStats();}
   setTimeout(()=>btn.classList.remove('spinning'),500);
 }
-
 // ─── LOGIN ───
 async function handleLogin(){
   const email=document.getElementById('login-email').value.trim();
@@ -306,9 +313,7 @@ async function handleLogin(){
   btn.disabled=false;btn.textContent='Sign In';
 }
 document.addEventListener('keydown',function(e){if(e.key==='Enter'&&document.getElementById('login-view').style.display!=='none')handleLogin();});
-
 async function loadUsers(){try{const d=await api({action:'getUsers'});allUsers=Array.isArray(d)?d:[];}catch(e){allUsers=[];}}
-
 function buildModuleSwitch(){
   const mods=ROLE_MODULES[currentUser.role]||['invoices'];
   const sw=document.getElementById('module-switch');
@@ -316,13 +321,11 @@ function buildModuleSwitch(){
   sw.style.display='flex';
   sw.innerHTML=mods.map(m=>`<button class="mod-btn${m===currentModule?' active':''}" id="mod-${m}" onclick="switchModule('${m}')">${MODULE_META[m].icon} ${MODULE_META[m].label}</button>`).join('');
 }
-
 function switchModule(mod){
-  currentModule=mod;activeFilter='All';tenantSearch='';
+  currentModule=mod;activeFilter='All';tenantSearch='';garbageAddrSearch='';
   buildModuleSwitch();
   setupModule();
 }
-
 function setupModule(){
   if(currentModule==='invoices'){
     const tabs=INVOICE_TABS[currentUser.role]||INVOICE_TABS.manager;
@@ -332,33 +335,33 @@ function setupModule(){
     const tabs=TENANT_TABS[currentUser.role]||[];
     currentTab='t_current';
     buildNav(tabs);loadTenants();
+  }else if(currentModule==='garbage'){
+    const tabs=GARBAGE_TABS[currentUser.role]||GARBAGE_TABS.manager;
+    currentTab=currentUser.role==='fieldworker'?'g_report':'g_open';
+    buildNav(tabs);loadGarbage();
   }else{
     const tabs=MAINT_TABS[currentUser.role]||MAINT_TABS.manager;
     currentTab=currentUser.role==='fieldworker'?'m_mine':'m_open';
     buildNav(tabs);loadTickets();loadTicketStats();
   }
 }
-
 function buildNav(tabs){
   const nav=document.getElementById('bottom-nav');
   const all=[...tabs,{id:'settings',icon:'⚙️',label:'Settings'}];
   nav.innerHTML=all.map(t=>`<button class="nav-btn${t.id===currentTab?' active':''}" id="nav-${t.id}" onclick="switchTab('${t.id}')"><span class="nav-icon">${t.icon}</span>${t.label}</button>`).join('');
 }
-
 function logout(){
-  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';tenantSearch='';
-  invoices=[];tickets=[];ticketStats=null;tenants=[];allUsers=[];
+  currentUser=null;currentTab='pending';currentModule='invoices';activeFilter='All';tenantSearch='';garbageAddrSearch='';
+  invoices=[];tickets=[];ticketStats=null;tenants=[];allUsers=[];garbage=[];properties=[];
   if(autoLogoutTimer)clearTimeout(autoLogoutTimer);
   document.getElementById('login-email').value='';document.getElementById('login-pin').value='';
   document.getElementById('login-error').style.display='none';
   document.getElementById('login-view').style.display='flex';document.getElementById('main-view').style.display='none';
 }
-
 function switchTab(t){currentTab=t;activeFilter='All';
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const a=document.getElementById('nav-'+t);if(a)a.classList.add('active');render();
 }
-
 // ─── DATA LOADING ───
 async function loadInvoices(){
   document.getElementById('main-content').innerHTML='<div class="loading">Loading invoices…</div>';
@@ -376,8 +379,23 @@ async function loadTenants(){
   try{const d=await api({action:'getTenants'});tenants=Array.isArray(d)?d:[];updateHeader();render();}
   catch(e){document.getElementById('main-content').innerHTML='<div class="loading">Error loading. Tap ↻ to retry.</div>';}
 }
-
+async function loadGarbage(){
+  document.getElementById('main-content').innerHTML='<div class="loading">Loading garbage reports…</div>';
+  try{
+    const [g,p]=await Promise.all([api({action:'getGarbage'}),api({action:'getProperties'})]);
+    garbage=Array.isArray(g)?g:[];
+    properties=Array.isArray(p)?p:[];
+    updateHeader();render();
+  }catch(e){document.getElementById('main-content').innerHTML='<div class="loading">Error loading. Tap ↻ to retry.</div>';}
+}
 function updateHeader(){
+  if(currentModule==='garbage'){
+    document.getElementById('header-title').textContent='Bulk Garbage';
+    const b=document.getElementById('header-badge');
+    const n=garbageOpenGroups().length;
+    if(n>0){b.textContent=n;b.style.display='';}else b.style.display='none';
+    return;
+  }
   if(currentModule==='invoices'){
     const p=getPendingForUser();
     document.getElementById('header-title').textContent=currentUser.role==='payment'?'Payment Queue':'Invoices';
@@ -387,7 +405,6 @@ function updateHeader(){
     document.getElementById('header-title').textContent='Tenants & Leases';document.getElementById('header-badge').style.display='none';
   }else{document.getElementById('header-title').textContent='Maintenance';document.getElementById('header-badge').style.display='none';}
 }
-
 function getPendingForUser(){
   return invoices.filter(i=>{
     const s=String(i['Invoice Status']||'').toLowerCase();if(s!=='pending'&&s!=='')return false;
@@ -395,7 +412,6 @@ function getPendingForUser(){
     return a.toLowerCase()===currentUser.name.toLowerCase()||a.toLowerCase()===currentUser.email.toLowerCase();
   });
 }
-
 // ─── RENDER ───
 function render(){
   const c=document.getElementById('main-content');if(!currentUser)return;
@@ -410,20 +426,22 @@ function render(){
   else if(currentTab==='t_current')renderTenantsCurrent(c);
   else if(currentTab==='t_expiring')renderTenantsExpiring(c);
   else if(currentTab==='t_all')renderTenantsAll(c);
+  else if(currentTab==='g_report')renderGarbageReport(c);
+  else if(currentTab==='g_open')renderGarbageOpen(c);
+  else if(currentTab==='g_done')renderGarbageDone(c);
+  else if(currentTab==='g_all')renderGarbageAll(c);
   else if(currentTab==='summary')renderSummary(c);
+  else if(currentTab==='users')renderUsersAdmin(c);
   else if(currentTab==='settings')renderSettings(c);
 }
-
 function userHeader(sub){
-  const colors={admin:'background:#fef9c3;color:#ca8a04',manager:'background:#dbeafe;color:#1d4ed8',payment:'background:#dcfce7;color:#16a34a',viewer:'background:#e8e8e8;color:#666',dispatcher:'background:#fce8ff;color:#a855f7',fieldworker:'background:#fff7ed;color:#ea580c'};
+  const colors={admin:'background:#fef9c3;color:#ca8a04',manager:'background:#dbeafe;color:#1d4ed8',payment:'background:#dcfce7;color:#16a34a',viewer:'background:#e8e8e8;color:#666',dispatcher:'background:#fce8ff;color:#a855f7',fieldworker:'background:#fff7ed;color:#ea580c',hauler:'background:#e6f6ec;color:#16a34a'};
   return `<div class="user-header"><div class="user-av" style="${colors[currentUser.role]||''}">${currentUser.init}</div><div><div class="user-name">${esc(currentUser.name)}</div><div class="user-sub">${esc(sub)}</div></div><button class="signout" onclick="logout()">Sign out</button></div>`;
 }
-
 function invoiceAge(d){if(!d)return '';const dt=new Date(d),now=new Date(),days=Math.floor((now-dt)/864e5);if(days<=0)return 'Today';if(days===1)return '1 day ago';if(days<=30)return days+' days ago';if(days<=60)return '1 month ago';return Math.floor(days/30)+' months ago';}
 function priPill(p){const l=(p||'').toLowerCase();if(l==='emergency')return 'pill-red';if(l==='urgent')return 'pill-orange';if(l==='high')return 'pill-yellow';if(l==='medium')return 'pill-blue';return 'pill-gray';}
 function priClass(p){const l=(p||'').toLowerCase();if(l==='emergency')return 'pri-emergency';if(l==='urgent')return 'pri-urgent';if(l==='high')return 'pri-high';if(l==='medium')return 'pri-medium';return 'pri-low';}
 function statusPill(s){const l=(s||'').toLowerCase();if(l==='resolved'||l.includes('closed'))return 'pill-green';if(l==='in progress')return 'pill-blue';if(l.includes('pending'))return 'pill-yellow';return 'pill-gray';}
-
 // ─── TENANT DATE HELPERS ───
 function parseLeaseDate(s){
   if(!s)return null;
@@ -454,12 +472,10 @@ function tenantStatusPill(s){
   if(l==='vacant'||l==='moved out')return 'pill-gray';
   return 'pill-blue';
 }
-
 // ─── OVERLAY ───
 function overlayClick(e){if(e.target===document.getElementById('overlay'))closeSheet();}
 function closeSheet(){document.getElementById('overlay').style.display='none';pendingAction=null;}
 function showSheet(html){document.getElementById('action-sheet').innerHTML=html;document.getElementById('overlay').style.display='flex';}
-
 // ─── INVOICE ACTIONS ───
 function openActionSheet(num,action){
   const inv=invoices.find(i=>String(i['#'])===String(num));pendingAction={num,action};
@@ -479,7 +495,6 @@ async function confirmAction(){
     updateHeader();render();
   }catch(e){alert('Error saving.');render();}
 }
-
 function openPaySheet(num){
   const inv=invoices.find(i=>String(i['#'])===String(num));pendingAction={num,action:'pay'};
   showSheet(`<div class="sheet-title">Mark as paid</div>
@@ -499,7 +514,6 @@ async function confirmPay(){
     render();
   }catch(e){alert('Error.');render();}
 }
-
 function openAssignInvoiceSheet(num){
   const inv=invoices.find(i=>String(i['#'])===String(num));
   const mgrs=allUsers.filter(u=>u.role==='manager'||u.role==='admin');
@@ -513,7 +527,6 @@ async function doAssignInvoice(num,name){
     const inv=invoices.find(i=>String(i['#'])===String(num));if(inv)inv['Assigned To']=name;updateHeader();render();
   }catch(e){alert('Error.');render();}
 }
-
 // ─── MAINTENANCE ACTIONS ───
 function openTicketStatusSheet(issueNum){
   const t=tickets.find(i=>String(i['Issue #'])===String(issueNum));
@@ -536,7 +549,6 @@ async function confirmTicketStatus(){
     if(t){t['Status']=status;if(note){const ex=t['NOTES']||'';t['NOTES']=ex?ex+'\n'+note:note;}}render();
   }catch(e){alert('Error.');render();}
 }
-
 function openTicketAssignSheet(issueNum){
   const t=tickets.find(i=>String(i['Issue #'])===String(issueNum));
   const workers=allUsers.filter(u=>u.role==='fieldworker'||u.role==='dispatcher');
@@ -552,7 +564,6 @@ async function doAssignTicket(issueNum,name){
     const t=tickets.find(i=>String(i['Issue #'])===String(issueNum));if(t)t['Assigned to']=name;render();
   }catch(e){alert('Error.');render();}
 }
-
 function openTicketPrioritySheet(issueNum){
   const t=tickets.find(i=>String(i['Issue #'])===String(issueNum));
   pendingAction={issueNum,type:'priority'};
@@ -569,7 +580,6 @@ async function confirmTicketPriority(){
     const t=tickets.find(i=>String(i['Issue #'])===String(issueNum));if(t)t['Priority']=priority;render();
   }catch(e){alert('Error.');render();}
 }
-
 function openTicketNoteSheet(issueNum){
   const t=tickets.find(i=>String(i['Issue #'])===String(issueNum));
   pendingAction={issueNum,type:'note'};
@@ -587,10 +597,8 @@ async function confirmTicketNote(){
     if(t){const ex=t['NOTES']||'';t['NOTES']=ex?ex+'\n'+note:note;}render();
   }catch(e){alert('Error.');render();}
 }
-
 // ─── TENANT ACTIONS ───
 function canEditTenants(){return currentUser&&(currentUser.role==='admin'||currentUser.role==='manager');}
-
 function openTenantSheet(id){
   const t=id?tenants.find(x=>String(x['ID'])===String(id)):null;
   pendingAction={type:'tenant',id:id||null};
@@ -621,7 +629,6 @@ function openTenantSheet(id){
     <textarea id="tn-notes" placeholder="Notes (court dates, arrangements, etc.)…">${t?esc(t['Notes']):''}</textarea>
     <div class="sheet-btns"><button class="btn-cancel" onclick="closeSheet()">Cancel</button><button class="btn-confirm-approve" onclick="confirmTenantSave()">✓ Save</button></div>`);
 }
-
 async function confirmTenantSave(){
   if(!pendingAction||pendingAction.type!=='tenant')return;
   const property=document.getElementById('tn-property').value.trim();
@@ -651,10 +658,8 @@ async function confirmTenantSave(){
     await loadTenants();
   }catch(e){alert('Error saving.');render();}
 }
-
 // ─── RENEW LEASE ───
 function dateToInputVal(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
-
 function openRenewSheet(id){
   const t=tenants.find(x=>String(x['ID'])===String(id));
   if(!t)return;
@@ -677,7 +682,6 @@ function openRenewSheet(id){
     <input id="rn-rent" type="number" inputmode="decimal" placeholder="Leave blank to keep current" value="${curRent}">
     <div class="sheet-btns"><button class="btn-cancel" onclick="closeSheet()">Cancel</button><button class="btn-confirm-approve" onclick="confirmRenew()">✓ Save Renewal</button></div>`);
 }
-
 async function confirmRenew(){
   if(!pendingAction||pendingAction.type!=='renew')return;
   const newEnd=document.getElementById('rn-end').value;
@@ -702,7 +706,6 @@ async function confirmRenew(){
     await loadTenants();
   }catch(e){alert('Error saving.');render();}
 }
-
 // ─── TENANT CARD ───
 function tenantCard(t){
   const id=String(t['ID']);
@@ -734,23 +737,19 @@ function tenantCard(t){
     ${canEditTenants()?`<button class="btn-renew-tenant" data-id="${escAttr(id)}" onclick="openRenewSheet(this.dataset.id)">🔄 Renew Lease</button><button class="btn-edit-tenant" data-id="${escAttr(id)}" onclick="openTenantSheet(this.dataset.id)">✏️ Edit</button>`:''}
   </div>`;
 }
-
 function tenantMatchesSearch(t){
   if(!tenantSearch)return true;
   const q=tenantSearch.toLowerCase();
   return ['Tenant Name','Property','Unit','Phone','Email'].some(f=>String(t[f]||'').toLowerCase().includes(q));
 }
-
 function tenantListHTML(list){
   if(!list.length)return `<div class="empty"><div class="empty-icon">👥</div><div class="empty-title">No tenants found</div><div class="empty-sub">${tenantSearch?'Try a different search.':'Tap ＋ Add Tenant to create the first record.'}</div></div>`;
   return list.map(t=>tenantCard(t)).join('');
 }
-
 function updateTenantList(baseListFn){
   const el=document.getElementById('tenant-list');
   if(el)el.innerHTML=tenantListHTML(baseListFn());
 }
-
 // ─── TICKET CARD ───
 function ticketCard(t){
   const issueNum=String(t['Issue #']);
@@ -762,11 +761,9 @@ function ticketCard(t){
   if(canAssign)acts+=`<button class="btn-action" data-issue="${escAttr(issueNum)}" onclick="openTicketAssignSheet(this.dataset.issue)">👤 Assign</button>`;
   if(canPriority)acts+=`<button class="btn-action" data-issue="${escAttr(issueNum)}" onclick="openTicketPrioritySheet(this.dataset.issue)">⚡ Priority</button>`;
   acts+=`<button class="btn-action" data-issue="${escAttr(issueNum)}" onclick="openTicketNoteSheet(this.dataset.issue)">💬 Add Note</button>`;
-
   const desc=esc(String(t['Description']||''));
   const notes=esc(String(t['NOTES']||''));
   const issue=esc(String(t['Issue']||t['Description']||'No description'));
-
   return `<div class="card">
     <div class="card-row"><div class="card-vendor">${issue.slice(0,80)}${issue.length>80?'…':''}</div><span class="pill ${priPill(t['Priority'])}">${esc(t['Priority']||'—')}</span></div>
     <div class="card-meta">#${esc(issueNum)} · ${esc(String(t['Open Date']||'').slice(0,10))}</div>
@@ -782,7 +779,6 @@ function ticketCard(t){
     <div class="btn-row">${acts}</div>
   </div>`;
 }
-
 // ─── INVOICE RENDERS ───
 function renderPending(c){
   updateHeader();const pending=getPendingForUser();
@@ -808,7 +804,6 @@ function renderPending(c){
   });
   c.innerHTML=html;
 }
-
 function renderReviewed(c){
   const done=invoices.filter(i=>{const s=String(i['Invoice Status']||'').toLowerCase();return s==='approved'||s==='rejected';});
   const app=done.filter(i=>String(i['Invoice Status']).toLowerCase()==='approved');
@@ -830,7 +825,6 @@ function renderReviewed(c){
   }
   c.innerHTML=html;
 }
-
 function renderPayment(c){
   const approved=invoices.filter(i=>String(i['Invoice Status']||'').toLowerCase()==='approved');
   const total=approved.reduce((s,i)=>s+Number(i['Invoice Amt']||0),0);
@@ -854,7 +848,6 @@ function renderPayment(c){
   }
   c.innerHTML=html;
 }
-
 function renderPaid(c){
   const paid=invoices.filter(i=>String(i['Invoice Status']||'').toLowerCase()==='paid');
   const total=paid.reduce((s,i)=>s+Number(i['Invoice Amt']||0),0);
@@ -873,7 +866,6 @@ function renderPaid(c){
   }
   c.innerHTML=html;
 }
-
 // ─── MAINTENANCE RENDERS ───
 function renderMaintOpen(c){
   const open=tickets.filter(t=>{const s=String(t['Status']||'').toLowerCase();return s!=='resolved'&&!s.includes('closed');});
@@ -884,7 +876,6 @@ function renderMaintOpen(c){
   else filtered.forEach(t=>{html+=ticketCard(t);});
   c.innerHTML=html;
 }
-
 function renderMaintMine(c){
   const mine=tickets.filter(t=>{
     const s=String(t['Status']||'').toLowerCase();if(s==='resolved'||s.includes('closed'))return false;
@@ -895,7 +886,6 @@ function renderMaintMine(c){
   else mine.forEach(t=>{html+=ticketCard(t);});
   c.innerHTML=html;
 }
-
 function renderMaintAll(c){
   const filtered=activeFilter==='All'?tickets:tickets.filter(t=>(t['Status']||'Unknown')===activeFilter);
   let html=userHeader(`${tickets.length} total tickets`);
@@ -904,7 +894,6 @@ function renderMaintAll(c){
   else filtered.forEach(t=>{html+=ticketCard(t);});
   c.innerHTML=html;
 }
-
 function renderMaintDash(c){
   if(!ticketStats){c.innerHTML='<div class="loading">Loading dashboard…</div>';return;}
   const s=ticketStats;
@@ -930,7 +919,6 @@ function renderMaintDash(c){
   html+=`</div>`;
   c.innerHTML=html;
 }
-
 // ─── TENANT RENDERS ───
 function currentTenantsList(){
   return tenants.filter(t=>{
@@ -955,7 +943,6 @@ function allTenantsList(){
     return tenantMatchesSearch(t);
   });
 }
-
 function tenantPageShell(sub,chipsHTML,listFnName,listHTML){
   let html=userHeader(sub);
   if(canEditTenants())html+=`<button class="btn-add-tenant" onclick="openTenantSheet()">＋ Add Tenant</button>`;
@@ -964,7 +951,6 @@ function tenantPageShell(sub,chipsHTML,listFnName,listHTML){
   html+=`<div id="tenant-list">${listHTML}</div>`;
   return html;
 }
-
 function renderTenantsCurrent(c){
   const active=tenants.filter(t=>{const s=String(t['Status']||'Current').toLowerCase();return s!=='vacant'&&s!=='moved out';});
   const totalRent=active.reduce((s,t)=>s+(Number(t['Monthly Rent'])||0),0);
@@ -972,7 +958,6 @@ function renderTenantsCurrent(c){
   let html=tenantPageShell(`${active.length} current tenants · ${fmt(totalRent)}/mo`,filterChips(active,'Property'),'currentTenantsList',tenantListHTML(list));
   c.innerHTML=html;
 }
-
 function renderTenantsExpiring(c){
   const list=expiringTenantsList();
   const expired=list.filter(t=>(leaseDaysLeft(t)??0)<0).length;
@@ -983,16 +968,380 @@ function renderTenantsExpiring(c){
   html+=`<div id="tenant-list">${list.length?tenantListHTML(list):`<div class="empty"><div class="empty-icon">✅</div><div class="empty-title">No leases expiring soon</div><div class="empty-sub">Nothing ends in the next 60 days.</div></div>`}</div>`;
   c.innerHTML=html;
 }
-
 function renderTenantsAll(c){
   const list=allTenantsList();
   let html=tenantPageShell(`${tenants.length} total records`,filterChips(tenants,'Status'),'allTenantsList',tenantListHTML(list));
   c.innerHTML=html;
 }
-
+// ═══ BULK GARBAGE ═══
+let garbageFlash='';
+function todayStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function daysSince(s){const d=parseLeaseDate(s);if(!d)return null;const n=new Date();n.setHours(0,0,0,0);return Math.round((n-d)/864e5);}
+function waitLabel(days){
+  if(days===null)return '';
+  if(days<=0)return 'Reported today';
+  if(days===1)return 'Waiting 1 day';
+  return 'Waiting '+days+' days';
+}
+function canPickup(){return currentUser&&['hauler','admin','dispatcher'].indexOf(currentUser.role)>=0;}
+function canReportGarbage(){return currentUser&&['fieldworker','admin','dispatcher','manager'].indexOf(currentUser.role)>=0;}
+function canCancelGarbage(){return currentUser&&currentUser.role==='admin';}
+// Group every still-open report by address, so three days of duplicates
+// show as ONE card with a count — not three separate jobs.
+function garbageOpenGroups(){
+  const open=garbage.filter(g=>String(g['Status']||'')==='Open');
+  const map={};
+  open.forEach(g=>{
+    const a=String(g['Address']||'').trim();
+    if(!a)return;
+    const k=a.toLowerCase();
+    if(!map[k])map[k]={address:a,city:String(g['City']||''),reports:[]};
+    map[k].reports.push(g);
+  });
+  return Object.keys(map).map(k=>{
+    const grp=map[k];
+    grp.reports.sort((a,b)=>String(a['Date Reported']).localeCompare(String(b['Date Reported'])));
+    grp.oldest=grp.reports[0]['Date Reported'];
+    grp.days=daysSince(grp.oldest);
+    return grp;
+  }).sort((a,b)=>(b.days||0)-(a.days||0));
+}
+function openCountFor(address){
+  const t=String(address||'').trim().toLowerCase();
+  return garbage.filter(g=>String(g['Status']||'')==='Open'&&String(g['Address']||'').trim().toLowerCase()===t).length;
+}
+// ─── REPORT FORM (the crew) ───
+function addrOptionsHTML(selected){
+  const q=garbageAddrSearch.trim().toLowerCase();
+  const list=properties.filter(p=>{
+    if(!q)return true;
+    // Never hide an address the user has already picked, even if the
+    // filter text no longer matches it — otherwise the pick vanishes silently.
+    if(selected&&String(p['Address'])===selected)return true;
+    return (String(p['Address']||'')+' '+String(p['City']||'')).toLowerCase().includes(q);
+  });
+  let h='<option value="">Select an address…</option>';
+  list.forEach(p=>{
+    const a=String(p['Address']||'');
+    const city=String(p['City']||'');
+    h+=`<option value="${escAttr(a)}" data-city="${escAttr(city)}"${a===selected?' selected':''}>${esc(a)} — ${esc(city)}</option>`;
+  });
+  if(!list.length)h+='<option value="" disabled>No address matches that search</option>';
+  return h;
+}
+function updateAddrOptions(){
+  const sel=document.getElementById('g-addr');
+  if(!sel)return;
+  const cur=sel.value;
+  sel.innerHTML=addrOptionsHTML(cur);
+  checkDupWarning();
+}
+function checkDupWarning(){
+  const sel=document.getElementById('g-addr');
+  const box=document.getElementById('g-dup');
+  if(!sel||!box)return;
+  const n=openCountFor(sel.value);
+  if(!sel.value||n===0){box.style.display='none';box.innerHTML='';return;}
+  box.style.display='block';
+  box.innerHTML=`⚠️ This address already has <b>${n}</b> open report${n>1?'s':''} waiting for pickup. You can still add this one — they'll all close together when it's picked up.`;
+}
+function renderGarbageReport(c){
+  let html=userHeader('Report bulk garbage');
+  if(garbageFlash){
+    html+=`<div class="card" style="background:var(--green-soft);border-color:transparent"><div style="color:var(--green);font-weight:600;font-size:15px">${esc(garbageFlash)}</div></div>`;
+    garbageFlash='';
+  }
+  if(!properties.length){
+    html+=`<div class="empty"><div class="empty-icon">🏠</div><div class="empty-title">No address list yet</div><div class="empty-sub">Open the Apps Script editor, choose <b>seedProperties</b> from the function list and click Run. That loads all 187 buildings.</div></div>`;
+    c.innerHTML=html;return;
+  }
+  html+=`<div class="card">
+    <label class="input-label" style="margin-bottom:6px">Date noticed</label>
+    <input class="input-field" id="g-date" type="date" value="${todayStr()}" style="margin-bottom:14px">
+    <label class="input-label" style="margin-bottom:6px">Address *</label>
+    <input class="search-box" id="g-addr-search" placeholder="🔍 Type to narrow the list…" value="${escAttr(garbageAddrSearch)}" oninput="garbageAddrSearch=this.value;updateAddrOptions()" style="margin-bottom:8px">
+    <select id="g-addr" onchange="checkDupWarning()" style="width:100%;border:0.5px solid var(--hairline);border-radius:var(--r-md);padding:15px;font-size:16px;font-family:inherit;background:var(--card);color:var(--text);-webkit-appearance:none;appearance:none;margin-bottom:10px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%238b8f9c' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 16px center;padding-right:42px;">${addrOptionsHTML('')}</select>
+    <div id="g-dup" style="display:none;background:var(--amber-soft);color:var(--amber);padding:11px 13px;border-radius:var(--r-sm);font-size:14px;line-height:1.4;margin-bottom:14px"></div>
+    <label class="input-label" style="margin-bottom:6px">Where at the building *</label>
+    <select id="g-loc" style="width:100%;border:0.5px solid var(--hairline);border-radius:var(--r-md);padding:15px;font-size:16px;font-family:inherit;background:var(--card);color:var(--text);-webkit-appearance:none;appearance:none;margin-bottom:14px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%238b8f9c' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 16px center;padding-right:42px;">
+      <option value="">Select a spot…</option>
+      ${GARBAGE_LOCATIONS.map(l=>`<option value="${escAttr(l)}">${esc(l)}</option>`).join('')}
+    </select>
+    <label class="input-label" style="margin-bottom:6px">What is it? (optional)</label>
+    <textarea id="g-note" placeholder="e.g. old mattress and a couch" style="width:100%;border:0.5px solid var(--hairline);border-radius:var(--r-md);padding:15px;font-size:16px;font-family:inherit;background:var(--card);color:var(--text);height:90px;resize:none;margin-bottom:14px"></textarea>
+    <button class="btn-approve" id="g-submit" onclick="submitGarbageReport()">✓ Submit Report</button>
+  </div>`;
+  c.innerHTML=html;
+}
+async function submitGarbageReport(){
+  const sel=document.getElementById('g-addr');
+  const address=sel?sel.value:'';
+  const loc=document.getElementById('g-loc').value;
+  const date=document.getElementById('g-date').value||todayStr();
+  const note=document.getElementById('g-note').value.trim();
+  if(!address){alert('Please pick an address');return;}
+  if(!loc){alert('Please pick where at the building the garbage is');return;}
+  const opt=sel.options[sel.selectedIndex];
+  const city=opt?(opt.getAttribute('data-city')||''):'';
+  const btn=document.getElementById('g-submit');
+  btn.disabled=true;btn.textContent='Saving…';
+  try{
+    const r=await api({action:'addGarbage',address,city,location:loc,note,dateReported:date,reportedBy:currentUser.name});
+    if(r&&r.success===false){alert(r.error||'Error saving.');btn.disabled=false;btn.textContent='✓ Submit Report';return;}
+    garbageFlash='Reported: '+address+(city?' ('+city+')':'');
+    garbageAddrSearch='';
+    await loadGarbage();
+  }catch(e){alert('Error saving. Check your signal and try again.');btn.disabled=false;btn.textContent='✓ Submit Report';}
+}
+// ─── OUTSTANDING (one card per address) ───
+function garbageGroupCard(g){
+  const n=g.reports.length;
+  const dayPill=g.days===null?'':(g.days>=7?'pill-red':g.days>=3?'pill-orange':'pill-blue');
+  let lines='';
+  g.reports.forEach(r=>{
+    lines+=`<div class="tenant-detail" style="align-items:flex-start">
+      <span class="td-label" style="white-space:nowrap">${esc(fmtLeaseDate(r['Date Reported']))}</span>
+      <span class="td-value" style="text-align:right;font-weight:500">${esc(r['Location']||'—')}${r['Note']?'<br><span style="color:var(--muted);font-weight:400">'+esc(r['Note'])+'</span>':''}<br><span style="color:var(--muted);font-weight:400;font-size:12px">by ${esc(r['Reported By']||'—')}</span></span>
+    </div>`;
+  });
+  return `<div class="card">
+    <div class="card-row"><div class="card-vendor">${esc(g.address)}</div>${n>1?`<span class="pill pill-red">${n} reports</span>`:''}</div>
+    <div class="card-prop">📍 ${esc(g.city||'—')}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+      ${dayPill?`<span class="pill ${dayPill}">${esc(waitLabel(g.days))}</span>`:''}
+      <span class="pill pill-gray">First reported ${esc(fmtLeaseDate(g.oldest))}</span>
+    </div>
+    ${lines}
+    ${canPickup()?`<button class="btn-approve" style="margin-top:12px" data-addr="${escAttr(g.address)}" onclick="openPickupSheet(this.dataset.addr)">✓ Mark Picked Up${n>1?' (closes all '+n+')':''}</button>`:''}
+    ${canCancelGarbage()&&n===1?`<button class="btn-edit-tenant" data-id="${escAttr(String(g.reports[0]['ID']))}" onclick="cancelGarbageReport(this.dataset.id)">✕ Cancel this report</button>`:''}
+  </div>`;
+}
+function renderGarbageOpen(c){
+  const groups=garbageOpenGroups();
+  const totalReports=groups.reduce((s,g)=>s+g.reports.length,0);
+  const stale=groups.filter(g=>(g.days||0)>=3).length;
+  let html=userHeader(`${groups.length} address${groups.length===1?'':'es'} waiting · ${totalReports} report${totalReports===1?'':'s'}`);
+  if(!groups.length){
+    html+=`<div class="empty"><div class="empty-icon">✅</div><div class="empty-title">Nothing outstanding</div><div class="empty-sub">Every reported pile has been picked up.</div></div>`;
+    c.innerHTML=html;return;
+  }
+  html+=`<div class="summary">
+    <div class="summary-item"><div class="summary-val">${groups.length}</div><div class="summary-lbl">Addresses</div></div>
+    <div class="summary-item"><div class="summary-val">${totalReports}</div><div class="summary-lbl">Reports</div></div>
+    <div class="summary-item"><div class="summary-val" style="color:#ea580c">${stale}</div><div class="summary-lbl">3+ days</div></div>
+  </div>`;
+  html+=filterChips(groups.map(g=>({City:g.city})),'City');
+  const filtered=activeFilter==='All'?groups:groups.filter(g=>(g.city||'Other')===activeFilter);
+  filtered.forEach(g=>{html+=garbageGroupCard(g);});
+  c.innerHTML=html;
+}
+function openPickupSheet(address){
+  const n=openCountFor(address);
+  pendingAction={type:'pickup',address};
+  showSheet(`<div class="sheet-title">Mark picked up</div>
+    <div class="sheet-sub">${esc(address)}</div>
+    ${n>1?`<div style="background:var(--green-soft);color:var(--green);padding:12px 14px;border-radius:var(--r-sm);font-size:14px;line-height:1.4;margin-bottom:14px">This address has <b>${n}</b> open reports stacked up. Saving closes <b>all ${n}</b> at once.</div>`:''}
+    <label class="input-label" style="margin-bottom:6px">Date picked up</label>
+    <input id="pk-date" type="date" value="${todayStr()}">
+    <div class="sheet-btns"><button class="btn-cancel" onclick="closeSheet()">Cancel</button><button class="btn-confirm-approve" onclick="confirmPickup()">✓ Mark Picked Up</button></div>`);
+}
+async function confirmPickup(){
+  if(!pendingAction||pendingAction.type!=='pickup')return;
+  const pickupDate=document.getElementById('pk-date').value||todayStr();
+  const address=pendingAction.address;
+  closeSheet();
+  document.getElementById('main-content').innerHTML='<div class="loading">Saving…</div>';
+  try{
+    const r=await api({action:'pickupGarbage',address,pickupDate,userName:currentUser.name});
+    if(r&&r.success===false){alert(r.error||'Error saving.');}
+    await loadGarbage();
+  }catch(e){alert('Error saving.');render();}
+}
+async function cancelGarbageReport(id){
+  if(!confirm('Cancel this report? It stays in the history but stops showing as outstanding.'))return;
+  document.getElementById('main-content').innerHTML='<div class="loading">Saving…</div>';
+  try{await api({action:'cancelGarbage',id,userName:currentUser.name});await loadGarbage();}
+  catch(e){alert('Error saving.');render();}
+}
+// ─── DONE / HISTORY ───
+function garbageHistoryCard(r){
+  const st=String(r['Status']||'');
+  const pill=st==='Picked Up'?'pill-green':st==='Cancelled'?'pill-gray':'pill-orange';
+  return `<div class="card">
+    <div class="card-row"><div class="card-vendor">${esc(r['Address']||'—')}</div><span class="pill ${pill}">${esc(st||'Open')}</span></div>
+    <div class="card-prop">📍 ${esc(r['City']||'—')}${r['Location']?' · '+esc(r['Location']):''}</div>
+    ${r['Note']?`<div class="card-note">${esc(r['Note'])}</div>`:''}
+    <div class="tenant-detail"><span class="td-label">Reported</span><span class="td-value">${esc(fmtLeaseDate(r['Date Reported']))} by ${esc(r['Reported By']||'—')}</span></div>
+    ${r['Pickup Date']?`<div class="tenant-detail"><span class="td-label">Picked up</span><span class="td-value">${esc(fmtLeaseDate(r['Pickup Date']))}${r['Picked Up By']?' by '+esc(r['Picked Up By']):''}</span></div>`:''}
+  </div>`;
+}
+function renderGarbageDone(c){
+  const done=garbage.filter(g=>String(g['Status']||'')==='Picked Up')
+    .sort((a,b)=>String(b['Pickup Date']).localeCompare(String(a['Pickup Date'])));
+  let html=userHeader(`${done.length} picked up`);
+  if(!done.length){html+=`<div class="empty"><div class="empty-icon">🗑</div><div class="empty-title">Nothing picked up yet</div></div>`;c.innerHTML=html;return;}
+  done.slice(0,100).forEach(r=>{html+=garbageHistoryCard(r);});
+  if(done.length>100)html+=`<div class="card-meta" style="text-align:center">Showing the 100 most recent of ${done.length}.</div>`;
+  c.innerHTML=html;
+}
+function renderGarbageAll(c){
+  const all=garbage.slice().sort((a,b)=>String(b['Date Reported']).localeCompare(String(a['Date Reported'])));
+  const filtered=activeFilter==='All'?all:all.filter(g=>(g['Status']||'Open')===activeFilter);
+  let html=userHeader(`${all.length} total reports`);
+  html+=filterChips(all,'Status');
+  if(!filtered.length){html+=`<div class="empty"><div class="empty-icon">📋</div><div class="empty-title">No reports</div></div>`;c.innerHTML=html;return;}
+  filtered.slice(0,150).forEach(r=>{html+=garbageHistoryCard(r);});
+  if(filtered.length>150)html+=`<div class="card-meta" style="text-align:center">Showing the 150 most recent of ${filtered.length}.</div>`;
+  c.innerHTML=html;
+}
+// ═══ USER MANAGEMENT (admin only) ═══
+const ROLE_INFO={
+  admin:{label:'Admin',desc:'Everything — invoices, maintenance, tenants, garbage, and this screen'},
+  manager:{label:'Manager',desc:'Approve invoices, maintenance, tenants, garbage'},
+  payment:{label:'Payment',desc:'The To Pay queue only'},
+  viewer:{label:'Viewer',desc:'Read-only invoices, maintenance and tenants'},
+  dispatcher:{label:'Dispatcher',desc:'Maintenance + garbage — can assign and close'},
+  fieldworker:{label:'Field worker',desc:'Their own maintenance jobs + reporting bulk garbage'},
+  hauler:{label:'Hauler',desc:'Bulk garbage pickup only — nothing else'},
+};
+const ROLE_ORDER=['admin','manager','payment','viewer','dispatcher','fieldworker','hauler'];
+function isAdmin(){return currentUser&&currentUser.role==='admin';}
+function roleAvColor(role){
+  const colors={admin:'background:#fef9c3;color:#ca8a04',manager:'background:#dbeafe;color:#1d4ed8',payment:'background:#dcfce7;color:#16a34a',viewer:'background:#e8e8e8;color:#666',dispatcher:'background:#fce8ff;color:#a855f7',fieldworker:'background:#fff7ed;color:#ea580c',hauler:'background:#e6f6ec;color:#16a34a'};
+  return colors[role]||'background:#e8e8e8;color:#666';
+}
+function randomPin(){let s='';for(let i=0;i<8;i++)s+=Math.floor(Math.random()*10);return s;}
+async function renderUsersAdmin(c){
+  if(!isAdmin()){c.innerHTML=userHeader('Users')+'<div class="empty"><div class="empty-icon">🔒</div><div class="empty-title">Admins only</div></div>';return;}
+  c.innerHTML='<div class="loading">Loading users…</div>';
+  await loadUsers();
+  const active=allUsers.filter(u=>String(u.status||'Active').toLowerCase()!=='inactive');
+  const inactive=allUsers.filter(u=>String(u.status||'Active').toLowerCase()==='inactive');
+  let html=userHeader(`${active.length} active · ${inactive.length} deactivated`);
+  html+=`<button class="btn-action" style="margin-bottom:14px" onclick="switchTab('settings')">← Back to Settings</button>`;
+  html+=`<button class="btn-add-tenant" onclick="openUserSheet()">＋ Add User</button>`;
+  const card=u=>{
+    const role=String(u.role||'').trim().toLowerCase();
+    const info=ROLE_INFO[role];
+    const off=String(u.status||'Active').toLowerCase()==='inactive';
+    const me=String(u.email||'').toLowerCase()===String(currentUser.email||'').toLowerCase();
+    return `<div class="card"${off?' style="opacity:.62"':''}>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <div class="user-av" style="${roleAvColor(role)};width:40px;height:40px;font-size:14px">${ini(String(u.name||'?'))}</div>
+        <div style="flex:1;min-width:0">
+          <div class="user-name">${esc(u.name||'—')}${me?' <span style="font-size:12px;color:var(--muted);font-weight:500">(you)</span>':''}</div>
+          <div class="user-sub" style="word-break:break-all">${esc(u.email||'')}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <span class="pill ${off?'pill-gray':'pill-blue'}">${esc(info?info.label:u.role||'—')}</span>
+        ${off?'<span class="pill pill-gray">Deactivated</span>':''}
+        ${!info?'<span class="pill pill-red">Unknown role — they will see nothing</span>':''}
+      </div>
+      ${info?`<div class="card-note" style="margin-bottom:12px">${esc(info.desc)}</div>`:''}
+      <div class="btn-row">
+        <button class="btn-action" data-e="${escAttr(u.email)}" onclick="openUserSheet(this.dataset.e)">✏️ Edit name / role</button>
+        <button class="btn-action" data-e="${escAttr(u.email)}" onclick="openPinSheet(this.dataset.e)">🔑 Set new PIN</button>
+        ${off
+          ? `<button class="btn-action" data-e="${escAttr(u.email)}" onclick="setUserActive(this.dataset.e,'Active')">↩️ Reactivate</button>`
+          : `<button class="btn-reject" data-e="${escAttr(u.email)}" onclick="setUserActive(this.dataset.e,'Inactive')">🚫 Deactivate</button>`}
+      </div>
+    </div>`;
+  };
+  if(!allUsers.length)html+=`<div class="empty"><div class="empty-icon">👥</div><div class="empty-title">No users found</div><div class="empty-sub">Check the Users tab in the sheet.</div></div>`;
+  active.forEach(u=>{html+=card(u);});
+  if(inactive.length){
+    html+=`<div class="dash-title" style="margin:20px 0 10px">Deactivated</div>`;
+    inactive.forEach(u=>{html+=card(u);});
+  }
+  c.innerHTML=html;
+}
+function openUserSheet(email){
+  const u=email?allUsers.find(x=>String(x.email).toLowerCase()===String(email).toLowerCase()):null;
+  pendingAction={type:'user',originalEmail:u?u.email:null};
+  const curRole=u?String(u.role||'').trim().toLowerCase():'';
+  const roleOpts=ROLE_ORDER.map(r=>`<option value="${r}"${r===curRole?' selected':''}>${esc(ROLE_INFO[r].label)} — ${esc(ROLE_INFO[r].desc)}</option>`).join('');
+  showSheet(`<div class="sheet-title">${u?'Edit user':'Add user'}</div>
+    <div class="sheet-sub">${u?esc(u.name||''):'New login for someone on your team'}</div>
+    <label class="input-label" style="margin-bottom:6px">Full name *</label>
+    <input id="us-name" placeholder="e.g. Rosa Delgado" value="${u?escAttr(u.name):''}">
+    <label class="input-label" style="margin-bottom:6px">Email / username *</label>
+    <input id="us-email" type="email" autocapitalize="none" placeholder="name@skyhimanagement.com" value="${u?escAttr(u.email):''}">
+    <label class="input-label" style="margin-bottom:6px">Role *</label>
+    <select id="us-role">${u?'':'<option value="">Select a role…</option>'}${roleOpts}</select>
+    ${u?'':`<label class="input-label" style="margin-bottom:6px">8-digit PIN *</label>
+    <input id="us-pin" inputmode="numeric" maxlength="8" placeholder="8 digits" value="${randomPin()}">
+    <div style="font-size:13px;color:var(--muted);margin:-4px 0 14px">I filled in a random PIN. Write it down and give it to them — they can change it later in Settings.</div>`}
+    <div class="sheet-btns"><button class="btn-cancel" onclick="closeSheet()">Cancel</button><button class="btn-confirm-approve" onclick="confirmUserSave()">✓ Save</button></div>`);
+}
+async function confirmUserSave(){
+  if(!pendingAction||pendingAction.type!=='user')return;
+  const name=document.getElementById('us-name').value.trim();
+  const email=document.getElementById('us-email').value.trim();
+  const role=document.getElementById('us-role').value;
+  const isNew=!pendingAction.originalEmail;
+  const pinEl=document.getElementById('us-pin');
+  const pin=pinEl?pinEl.value.trim():'';
+  if(!name){alert('Please enter a name');return;}
+  if(!email){alert('Please enter an email');return;}
+  if(!role){alert('Please pick a role');return;}
+  if(isNew&&!/^\d{8}$/.test(pin)){alert('PIN must be exactly 8 digits');return;}
+  const originalEmail=pendingAction.originalEmail;
+  closeSheet();
+  document.getElementById('main-content').innerHTML='<div class="loading">Saving…</div>';
+  try{
+    const p=isNew
+      ?{action:'addUser',name,email,role,pin,actorEmail:currentUser.email}
+      :{action:'updateUser',name,email,role,originalEmail,actorEmail:currentUser.email};
+    const r=await api(p);
+    if(r&&r.success===false){alert(r.error||'Error saving.');}
+    else if(isNew)alert('User added.\n\n'+name+'\n'+email+'\nPIN: '+pin+'\n\nWrite this down — the PIN is not shown again.');
+    renderUsersAdmin(document.getElementById('main-content'));
+  }catch(e){alert('Error saving.');renderUsersAdmin(document.getElementById('main-content'));}
+}
+function openPinSheet(email){
+  const u=allUsers.find(x=>String(x.email).toLowerCase()===String(email).toLowerCase());
+  pendingAction={type:'userpin',email};
+  showSheet(`<div class="sheet-title">Set a new PIN</div>
+    <div class="sheet-sub">${esc(u?u.name:email)}</div>
+    <label class="input-label" style="margin-bottom:6px">New 8-digit PIN</label>
+    <input id="us-newpin" inputmode="numeric" maxlength="8" value="${randomPin()}">
+    <div style="font-size:13px;color:var(--muted);margin:-4px 0 14px">This replaces their old PIN straight away. Give them the new one.</div>
+    <div class="sheet-btns"><button class="btn-cancel" onclick="closeSheet()">Cancel</button><button class="btn-confirm-approve" onclick="confirmPinSet()">✓ Set PIN</button></div>`);
+}
+async function confirmPinSet(){
+  if(!pendingAction||pendingAction.type!=='userpin')return;
+  const pin=document.getElementById('us-newpin').value.trim();
+  if(!/^\d{8}$/.test(pin)){alert('PIN must be exactly 8 digits');return;}
+  const email=pendingAction.email;
+  closeSheet();
+  document.getElementById('main-content').innerHTML='<div class="loading">Saving…</div>';
+  try{
+    const r=await api({action:'setUserPin',email,pin,actorEmail:currentUser.email});
+    if(r&&r.success===false)alert(r.error||'Error saving.');
+    else alert('New PIN for '+email+':\n\n'+pin+'\n\nWrite this down — it is not shown again.');
+  }catch(e){alert('Error saving.');}
+  renderUsersAdmin(document.getElementById('main-content'));
+}
+async function setUserActive(email,status){
+  const verb=status==='Inactive'?'Deactivate':'Reactivate';
+  const extra=status==='Inactive'?'\n\nThey will not be able to sign in. Their history stays in the sheet.':'';
+  if(!confirm(verb+' '+email+'?'+extra))return;
+  document.getElementById('main-content').innerHTML='<div class="loading">Saving…</div>';
+  try{
+    const r=await api({action:'setUserStatus',email,status,actorEmail:currentUser.email});
+    if(r&&r.success===false)alert(r.error||'Error saving.');
+  }catch(e){alert('Error saving.');}
+  renderUsersAdmin(document.getElementById('main-content'));
+}
 // ─── SETTINGS ───
 function renderSettings(c){
   let html=userHeader('Settings');
+  if(isAdmin()){
+    html+=`<div class="settings-card"><div class="settings-title">👥 Team & Access</div>
+      <div style="font-size:14px;color:var(--text2);margin-bottom:12px;line-height:1.4">Add someone new, change what they can see, reset a PIN, or shut off access for someone who has left.</div>
+      <button class="btn-save" style="margin-top:0" onclick="switchTab('users')">Manage Users</button></div>`;
+  }
   html+=`<div class="settings-card"><div class="settings-title">🔑 Change PIN</div><div class="settings-row">
     <div class="input-group"><label class="input-label">Current PIN</label><input class="input-field" id="old-pin" type="password" inputmode="numeric" maxlength="8" placeholder="Enter current PIN"></div>
     <div class="input-group"><label class="input-label">New PIN (8 digits)</label><input class="input-field" id="new-pin" type="password" inputmode="numeric" maxlength="8" placeholder="Enter new PIN"></div>
@@ -1003,10 +1352,9 @@ function renderSettings(c){
     <div style="margin-bottom:8px"><strong>Name:</strong> ${esc(currentUser.name)}</div>
     <div style="margin-bottom:8px"><strong>Email:</strong> ${esc(currentUser.email)}</div>
     <div><strong>Role:</strong> ${esc(currentUser.role)}</div></div></div>`;
-  html+=`<div class="settings-card"><div class="settings-title">ℹ️ About</div><div style="font-size:14px;color:#888">SkyHi Management v6.1 · Invoices · Maintenance · Tenants</div></div>`;
+  html+=`<div class="settings-card"><div class="settings-title">ℹ️ About</div><div style="font-size:14px;color:#888">SkyHi Management v7.0 · Invoices · Maintenance · Tenants · Bulk Garbage</div></div>`;
   c.innerHTML=html;
 }
-
 async function handleChangePin(){
   const oldPin=document.getElementById('old-pin').value.trim();
   const newPin=document.getElementById('new-pin').value.trim();
@@ -1024,7 +1372,6 @@ function showPinMsg(text,type){
   el.className='pin-msg '+(type==='ok'?'pin-ok':'pin-err');el.style.display='block';
   setTimeout(()=>{el.style.display='none';},4000);
 }
-
 async function renderSummary(c){
   c.innerHTML='<div class="loading">Loading summary…</div>';
   try{
@@ -1051,7 +1398,6 @@ async function renderSummary(c){
     c.innerHTML=html;
   }catch(e){c.innerHTML='<div class="loading">Error loading summary.</div>';}
 }
-
 // INIT
 document.getElementById('main-view').style.display='none';
 document.getElementById('login-view').style.display='flex';
